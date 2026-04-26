@@ -1,0 +1,24 @@
+{{- /*
+    Stub for google_analytics.html.
+
+    PaperMod's head.html references this partial unconditionally; Hugo
+    removed the built-in version around v0.123, so we provide our own.
+
+    To enable Google Analytics later, add this to hugo.toml:
+
+        [services]
+          [services.googleAnalytics]
+            ID = "G-XXXXXXXXXX"
+
+    With no ID set, this partial renders nothing.
+*/ -}}
+{{- with site.Config.Services.GoogleAnalytics.ID -}}
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id={{ . }}"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', '{{ . }}');
+</script>
+{{- end -}}
