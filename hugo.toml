@@ -1,0 +1,102 @@
+# Site config — uses TOML format (Hugo's default)
+# Update `baseURL` below once you create the GitHub repo.
+
+baseURL = 'https://wgzesg.github.io/llm_stories/'
+title = 'LLM Stories'
+theme = 'PaperMod'
+
+# i18n
+defaultContentLanguage = 'en'
+defaultContentLanguageInSubdir = false
+hasCJKLanguage = true   # important for Chinese word-counting / reading time
+
+[languages]
+  [languages.en]
+    languageName = "English"
+    weight = 1
+    title = "LLM Stories"
+    [languages.en.params]
+      [languages.en.params.homeInfoParams]
+        Title = "LLM Stories 👋"
+        Content = """
+A series of essays building up *mental models* for how modern LLMs are actually served — written in plain language, no math notation, lots of ASCII diagrams.
+
+The goal isn't to teach equations. It's to build the **intuitions** that make every later equation feel inevitable. Each article picks one slice of the LLM serving pipeline and walks through it as a discovery journey.
+"""
+    [[languages.en.menu.main]]
+      identifier = "posts"
+      name = "Posts"
+      url = "/posts/"
+      weight = 10
+    [[languages.en.menu.main]]
+      identifier = "tags"
+      name = "Tags"
+      url = "/tags/"
+      weight = 20
+
+  [languages.zh]
+    languageName = "中文"
+    weight = 2
+    title = "LLM Stories"
+    [languages.zh.params]
+      [languages.zh.params.homeInfoParams]
+        Title = "LLM Stories 👋"
+        Content = """
+一个关于现代 LLM 究竟是怎么被服务起来的*心智模型*系列。用大白话写，不写矩阵公式，到处是 ASCII 图。
+
+目标不是教你公式。而是建立那些让后面每一条公式都显得理所当然的**直觉**。每一篇都挑出 LLM serving pipeline 的一小块，像探索之旅一样走一遍。
+"""
+    [[languages.zh.menu.main]]
+      identifier = "posts"
+      name = "文章"
+      url = "/posts/"
+      weight = 10
+    [[languages.zh.menu.main]]
+      identifier = "tags"
+      name = "标签"
+      url = "/tags/"
+      weight = 20
+
+# Site-wide params
+[params]
+  env = "production"
+  description = "Mental models for how modern LLMs are actually served."
+  author = "Pino"
+  defaultTheme = "auto"        # auto | light | dark
+  disableThemeToggle = false
+  ShowReadingTime = true
+  ShowShareButtons = false
+  ShowPostNavLinks = true
+  ShowBreadCrumbs = true
+  ShowCodeCopyButtons = true
+  ShowWordCount = false
+  ShowRssButtonInSectionTermList = true
+  ShowToc = true
+  TocOpen = false
+  ShowFullTextinRSS = false
+  comments = false
+
+  # Show series block (PaperMod has built-in series support — perfect for this)
+  [params.assets]
+    disableHLJS = false
+    disableFingerprinting = false
+
+# Pretty URLs and search-friendly outputs
+[outputs]
+  home = ["HTML", "RSS", "JSON"]
+
+# Markdown rendering
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true   # allow raw HTML inside markdown (rarely needed, but doesn't hurt)
+  [markup.highlight]
+    noClasses = false
+    codeFences = true
+    guessSyntax = true
+    lineNos = false
+    style = "github-dark"
+  [markup.tableOfContents]
+    endLevel = 3
+    ordered = false
+    startLevel = 2

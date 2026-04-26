@@ -1,4 +1,15 @@
-# Tensor Parallelism 心智模型：从零搭起
+---
+title: "Tensor Parallelism 心智模型：从零搭起"
+date: 2026-04-26T00:00:00+00:00
+draft: false
+summary: "把 weight matrix 用两种方式读，就有两种把它切到多 GPU 上的方法。从 transformer prefill 里的一次 matmul，推出 tensor parallelism 的整套心智模型。"
+description: "Tensor parallelism 心智模型 —— 从 transformer prefill 阶段的一次 matmul 推出。顺带讲清楚 multi-head attention 为什么早就为 column-parallel TP 切好了刀口。"
+tags: ["tensor-parallelism", "transformers", "llm-serving", "attention", "mental-model"]
+series: ["llm-stories"]
+showToc: true
+TocOpen: false
+weight: 1
+---
 
 这不是一份教程。这是一段在你脑子里搭 mental model 的旅程 —— 每读完一节，你会忍不住想 *"哦，原来就这么回事？"*。读到最后，tensor parallelism 不再是一个工程上的奇技淫巧。在那个场景下，它会变成 —— **你能想到的最自然不过的两个选择**。
 

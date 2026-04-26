@@ -1,4 +1,15 @@
-# Tensor Parallelism, Built From Scratch in Your Head
+---
+title: "Tensor Parallelism, Built From Scratch in Your Head"
+date: 2026-04-26T00:00:00+00:00
+draft: false
+summary: "Two ways to read a weight matrix, two ways to split it across GPUs. A mental model for tensor parallelism, derived from one matmul in a transformer's prefill phase."
+description: "A mental model for tensor parallelism — derived from one matmul in a transformer's prefill phase. Plus why multi-head attention was already pre-cut for column-parallel TP."
+tags: ["tensor-parallelism", "transformers", "llm-serving", "attention", "mental-model"]
+series: ["llm-stories"]
+showToc: true
+TocOpen: false
+weight: 1
+---
 
 This isn't a tutorial. It's a walk through the mental model — the kind where each section makes you go *"oh, that's all it is?"* By the end, tensor parallelism shouldn't feel like an engineering trick. It should feel like the only two reasonable things you could possibly do.
 

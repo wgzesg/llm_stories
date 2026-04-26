@@ -7,8 +7,12 @@
 *.swp
 *~
 
-# Build output (will be added when we set up a static site generator)
+# Hugo build output
 public/
+resources/
+.hugo_build.lock
+
+# Other build output
 dist/
 .cache/
 node_modules/

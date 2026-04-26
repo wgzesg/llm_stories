@@ -2,23 +2,19 @@
 
 A series of essays building up *mental models* for how modern LLMs are actually served — written in plain language, no math notation, lots of pictures made of ASCII.
 
+📖 **Live site**: https://wgzesg.github.io/llm_stories/ *(update once Pages is enabled)*
+
 The goal isn't to teach you the equations. It's to build the **intuitions** that make every later equation feel inevitable. Each article picks one slice of the LLM serving pipeline and walks through it as a discovery journey — the kind where each section ends with *"oh, that's all it is?"*
 
 Most articles come in two languages: English and 中文. The Chinese versions keep technical terms in English (中英混排) — they're written for Chinese tech developers and learners, not as literal translations.
 
 ---
 
-## Where we are now
+## Articles
 
-The very first article covers a single, narrow slice:
-
-> **One layer.** **Prefill node.** **The QKV projection step.**
->
-> What does that one matmul mean, and how do we split it across GPUs?
-
-That's it. One matmul. From this we get the full mental model for **tensor parallelism** — column-parallel, row-parallel, and why multi-head attention falls naturally into column-parallel TP.
-
-It's a tiny corner of the LLM serving picture. Everything else builds outward from here.
+| # | Title | English | 中文 |
+|---|---|---|---|
+| 01 | Tensor parallelism, built from scratch in your head | [index.md](content/posts/01-tensor-parallelism-mental-model/index.md) | [index.zh.md](content/posts/01-tensor-parallelism-mental-model/index.zh.md) |
 
 ---
 
@@ -27,24 +23,52 @@ It's a tiny corner of the LLM serving picture. Everything else builds outward fr
 The series will expand outward layer by layer, axis by axis. Roughly in this order:
 
 1. **Tensor parallelism, built from scratch in your head** ✅ *(this one)*
-   - One layer's QKV projection. Two ways to read a matrix. Multi-head attention as already-pre-cut.
-2. **Attention itself** — what happens after the QKV projection. Q · K, the softmax, the V mix. Why it's quadratic in sequence length.
-3. **Norms, residuals, and the rest of the block** — LayerNorm/RMSNorm, residual streams, what they're really doing.
-4. **FFN and MoE** — the other half of the transformer block. Why FFN is `d → 4d → d`. How MoE replaces dense FFN with sparse routing.
-5. **Stacking layers** — what changes when you have N layers, not just 1. Pipeline parallelism enters the chat.
-6. **Batching** — `n` tokens at once, dynamic batching, continuous batching.
-7. **Decode node and KV cache** — the *other* phase of serving. Why KV cache exists. What's different about generating one token at a time.
-8. **Putting it all together** — how a full serving stack composes prefill nodes, decode nodes, KV cache transfer, and parallelism axes.
+2. **Attention itself** — what happens after the QKV projection
+3. **Norms, residuals, and the rest of the block**
+4. **FFN and MoE**
+5. **Stacking layers** — pipeline parallelism enters
+6. **Batching** — `n` tokens at once, dynamic, continuous
+7. **Decode node and KV cache**
+8. **Putting it all together**
 
-These will arrive as I write them. Order may shift; topics may merge or split.
+Order may shift; topics may merge or split.
 
 ---
 
-## Articles
+## Tech stack
 
-| # | Title | English | 中文 |
-|---|---|---|---|
-| 01 | Tensor parallelism, built from scratch in your head | [en.md](01-tensor-parallelism-mental-model/en.md) | [zh.md](01-tensor-parallelism-mental-model/zh.md) |
+- **Static site generator**: [Hugo](https://gohugo.io/) (extended)
+- **Theme**: [PaperMod](https://github.com/adityatelange/hugo-PaperMod) (added as a git submodule under `themes/PaperMod`)
+- **Hosting**: GitHub Pages, deployed automatically by `.github/workflows/hugo.yml` on every push to `main`
+
+### Local preview
+
+```bash
+# Clone with the theme submodule
+git clone --recurse-submodules <repo-url>
+cd llm_stories
+
+# If you cloned without --recurse-submodules:
+git submodule update --init --recursive
+
+# Run the dev server
+hugo server -D --buildDrafts
+
+# Open http://localhost:1313/llm_stories/
+```
+
+### Adding a new article
+
+```bash
+hugo new content posts/02-some-article/index.md       # English (default)
+hugo new content posts/02-some-article/index.zh.md    # Chinese
+```
+
+Then edit the frontmatter (`draft: false` when ready) and the body.
+
+### Editing published articles
+
+Just edit the markdown in `content/posts/<slug>/` and `git push`. The GitHub Action rebuilds the site automatically. Markdown is the source of truth; nothing is ever "locked."
 
 ---
 
