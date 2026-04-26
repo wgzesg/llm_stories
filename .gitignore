@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Build output (will be added when we set up a static site generator)
+public/
+dist/
+.cache/
+node_modules/
+
+# OS
+Thumbs.db
