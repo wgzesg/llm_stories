@@ -3,7 +3,7 @@ title: "Walking Tensor Parallelism Through a Full Block"
 date: 2026-04-29T00:00:00+00:00
 draft: false
 summary: "Take article 01's two cuts and walk them through a full transformer block. Try column-parallel everywhere first, watch the comm explode, then let row-parallel catch column's output for free — and land at two all-reduces per block."
-description: "Walking tensor parallelism through a full transformer block. Discovery-journey style: try v1 (always column-parallel), see why it costs a cross-GPU gather in front of every matmul, then pair column with row to land the Megatron pattern of exactly two all-reduces per block."
+description: "How to split a full transformer block across two GPUs. Start with column-parallel everywhere, see why it costs a gather in front of every matmul, then pair it with row-parallel to land at the Megatron pattern of two all-reduces per block."
 tags: ["tensor-parallelism", "transformers", "llm-serving", "megatron", "mental-model"]
 series: ["llm-stories"]
 showToc: true
