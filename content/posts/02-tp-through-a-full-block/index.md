@@ -2,7 +2,7 @@
 title: "Walking Tensor Parallelism Through a Full Block"
 date: 2026-04-29T00:00:00+00:00
 draft: false
-summary: "Take article 01's two cuts and walk them through a full transformer block, with concrete shapes on each GPU at every step. Try column-parallel everywhere first, watch the comm explode (four gathers per block), then let row-parallel catch column's output for free — and land at two all-reduces per block."
+summary: "Walk article 01's two cuts through a full transformer block, with concrete shapes on each GPU at every step. Apply one cut to every matmul first — comm explodes (four gathers per block). Then pair the two cuts as duals and watch them snap into the architecture's widen-narrow rhythm, landing at two all-reduces per block."
 description: "How to split a full transformer block across two GPUs, with concrete shapes traced through every step. Start with column-parallel everywhere, see why it costs four gathers per block, then pair it with row-parallel to land at the Megatron pattern of two all-reduces per block."
 tags: ["tensor-parallelism", "transformers", "llm-serving", "megatron", "mental-model"]
 series: ["llm-stories"]
@@ -11,10 +11,17 @@ TocOpen: false
 weight: 2
 ---
 
-[Article 01](/llm_stories/posts/01-tensor-parallelism-mental-model/) left you with two ways to split **one** matmul across two GPUs:
+[Article 01](/llm_stories/posts/01-tensor-parallelism-mental-model/) left you with two ways to split **one** matmul across two GPUs. They're easier to keep straight by what they *do* than by what they're called in the literature, so let's lay them out side by side:
 
-- **Strategy A (column-parallel)** — each GPU runs its half of the `fx`es on the **full** input. Outputs **concatenate**. Cheap.
-- **Strategy B (row-parallel)** — each GPU runs its rows on **half** the input. Outputs are **partial sums** that need an **all-reduce**. One comm step per layer.
+|                          | **Strategy A** — *split the `fx`es*                  | **Strategy B** — *split the rows*                            |
+|--------------------------|--------------------------------------------------------|----------------------------------------------------------------|
+| What you slice           | the matrix's columns (each column is one `fx`)         | the matrix's rows (each row is a basis vector)                 |
+| Each GPU's **input**     | the **full** input vector                              | **half** of the input features                                 |
+| Each GPU's **output**    | **half** of the output features                        | a **partial sum** of the *full* output                         |
+| How outputs combine      | **concatenate** (free)                                 | **all-reduce** (one comm step)                                 |
+| Also known as            | column-parallel                                        | row-parallel                                                   |
+
+The compact way to read each column: **A = "full in, half out."** **B = "half in, sum out."** That's enough mental model for everything below.
 
 A real transformer block isn't one matmul — it's **four**, plus some pointwise glue. So the natural next question is: **how do we cut a *whole block* across two GPUs?**
 
@@ -72,47 +79,48 @@ So the whole TP story for this block lives at those four matmuls. Two GPUs, four
 
 ---
 
-## 2. v1 — just split everything column-wise
+## 2. v1 — apply Strategy A (full → half) to every matmul
 
-What's the obvious first move? From article 01:
+What's the obvious first move? From article 01, Strategy A was:
 
-- column-parallel was the **cheap** cut (concatenate, no all-reduce in the middle of one matmul);
-- on QKV it happens to **land exactly on head boundaries** — `k = 8 · 64 = 512`, split column-wise into 256 per GPU = 4 heads per GPU;
-- and "each GPU computes its own half of the output features" is just easier to picture.
+- the **cheap** cut (concatenate, no all-reduce inside the matmul);
+- on QKV it happens to **land exactly on head boundaries** — `k = 8 · 64 = 512`, split into 256 per GPU = 4 heads each;
+- and "full input in, half output out" is the easier story to picture.
 
-So apply column-parallel to all four matmuls. Walk through the block one step at a time, watching the shape that **each** GPU holds:
+So apply A to all four matmuls. Walk through the block one step at a time, watching the shape that **each** GPU holds. In the trace below, `(A)` next to a matmul means "Strategy A: full input → half output."
 
 ```
 Step                                Each GPU holds              Comm
 ─────────────────────────────────────────────────────────────────────────
 input                               [4 × 512]   full            —
 LayerNorm                           [4 × 512]   full            — (redundant)
-QKV proj    (col)                   [4 × 768]   its 4 heads of QKV   —
+QKV proj      (A: full→half)        [4 × 768]   its 4 heads of QKV   —
 attention                           [4 × 256]   its 4 heads' out     —
 
-                                    ↓ next is output proj (col), it needs the FULL
-                                    ↓ k=512 input, but each GPU only has 256.
+                                    ↓ next matmul (output proj) is also A,
+                                    ↓ which needs the FULL k=512 input,
+                                    ↓ but each GPU only holds 256.
 
 GATHER                              [4 × 512]   full            ★ gather #1
-output proj (col)                   [4 × 256]   half of d output     —
+output proj   (A: full→half)        [4 × 256]   half of d output     —
 
-                                    ↓ next is + residual, residual is full d=512,
+                                    ↓ next is + residual; residual is full d=512,
                                     ↓ output is split d=256.
 
 GATHER                              [4 × 512]   full            ★ gather #2
 + residual                          [4 × 512]   full            —
 LayerNorm                           [4 × 512]   full            — (redundant)
 
-FFN-up      (col)                   [4 × 1024]  half FFN-hidden      —
+FFN-up        (A: full→half)        [4 × 1024]  half FFN-hidden      —
 activation                          [4 × 1024]  half (pointwise)     —
 
-                                    ↓ next is FFN-down (col), needs FULL 4d=2048
-                                    ↓ input, each GPU only has 1024.
+                                    ↓ next matmul (FFN-down) is A; needs FULL
+                                    ↓ 4d=2048 input, each GPU only has 1024.
 
 GATHER                              [4 × 2048]  full            ★ gather #3
-FFN-down    (col)                   [4 × 256]   half of d output     —
+FFN-down      (A: full→half)        [4 × 256]   half of d output     —
 
-                                    ↓ next is + residual, full d=512 needed.
+                                    ↓ next is + residual; full d=512 needed.
 
 GATHER                              [4 × 512]   full            ★ gather #4
 + residual                          [4 × 512]   full            —
@@ -120,7 +128,7 @@ GATHER                              [4 × 512]   full            ★ gather #4
 
 **Four cross-GPU gathers per block.** Per forward pass. (And another four in backward.)
 
-Two of them happen because the next col-parallel matmul demands a full input. The other two happen because the residual add expects a full vector and we just produced a split one. Same root cause either way: **column-parallel produces a split output, and almost everything downstream wants a full input.**
+Two of them happen because the next A-style matmul demands a full input. The other two happen because the residual add expects a full vector and we just produced a half one. Same root cause: **Strategy A produces a half output, and almost everything downstream wants a full input.**
 
 ---
 
@@ -134,33 +142,33 @@ So the question becomes:
 
 > **Can we avoid the gather?**
 
-Each gather only exists because the next op needed a full vector that we'd just split. What we actually need is for the next matmul to be *happy* with the split input.
+Each gather only exists because the next op needed a full vector and Strategy A had just produced a half one. What we actually need is a matmul that's *happy* consuming the half output directly.
 
 Article 01 already handed us one.
 
 ---
 
-## 4. v2 — let the next matmul consume the split directly
+## 4. v2 — pair Strategy A with Strategy B (half → sum)
 
 Look at the two strategies through one specific lens:
 
-- column-parallel **outputs** something split into halves.
-- row-parallel **inputs** something split into halves.
+- **Strategy A** *outputs* a **half**.
+- **Strategy B** *inputs* a **half**.
 
-**Same shape.** Strategy A's output is exactly what Strategy B wants as input. They snap together with no comm between them.
+**Same shape.** A's output is exactly what B wants as input. They snap together with no comm between them.
 
-So replace v1's "column → gather → column" with "column → row." Strategy B eats the split directly. The only comm cost shows up at the *end* of B (the all-reduce that turns partial sums into the full output the residual + LN want).
+So replace v1's "A → gather → A" with "A → B." B eats the half output directly. The only comm cost shows up at the *end* of B — the all-reduce that turns the partial sum into the full output the residual + LN want.
 
-Apply this to the block — pair every column-parallel matmul with a row-parallel one:
+Apply this to the block — pair every A matmul with a B matmul:
 
 ```
 Step                                Each GPU holds              Comm
 ─────────────────────────────────────────────────────────────────────────
 input                               [4 × 512]   full            —
 LayerNorm                           [4 × 512]   full            — (redundant)
-QKV proj    (col)                   [4 × 768]   its 4 heads of QKV   —
+QKV proj      (A: full→half)        [4 × 768]   its 4 heads of QKV   —
 attention                           [4 × 256]   its 4 heads' out     —
-output proj (row)                   [4 × 512]   partial sum     —
+output proj   (B: half→sum)         [4 × 512]   partial sum     —
 
                                     ↓ need full for + residual / LN
 
@@ -168,9 +176,9 @@ ALL-REDUCE                          [4 × 512]   full            ★ all-reduce 
 + residual                          [4 × 512]   full            —
 LayerNorm                           [4 × 512]   full            — (redundant)
 
-FFN-up      (col)                   [4 × 1024]  half FFN-hidden      —
+FFN-up        (A: full→half)        [4 × 1024]  half FFN-hidden      —
 activation                          [4 × 1024]  half (pointwise)     —
-FFN-down    (row)                   [4 × 512]   partial sum     —
+FFN-down      (B: half→sum)         [4 × 512]   partial sum     —
 
                                     ↓ need full for + residual / LN
 
@@ -184,32 +192,41 @@ That's the Megatron pattern. We didn't have to be told it — we walked into it.
 
 ---
 
-## 5. Why this is the natural rhythm
+## 5. The duality you didn't see coming
 
-Look at what the data looks like at each "rest point":
+Article 01 introduced A and B as if they were two separate strategies — two ways to read one matrix. Put them side by side and look at what flows in and out of each:
 
-- **Before any matmul:** `[4 × 512]` full, identical on both GPUs.
-- **Between A and B (inside attention, inside FFN):** split across GPUs. *No comm needed* — that's exactly what B wants.
-- **After B + all-reduce:** `[4 × 512]` full, identical on both GPUs.
-- **Before the next A:** `[4 × 512]` full again. ✓
+- **A** takes a **full input** and produces a **half output**.
+- **B** takes a **half input** and produces a **full sum** as output.
 
-The block **enters** in the "full vector replicated" state and **leaves** in the same state. In between, the data is allowed to be split — but only across the A→B span, which is the *one place* where split is the right shape.
+They're not two strategies. They're **two halves of one round-trip.** A's output shape *is* B's input shape. B's output shape (after the all-reduce) *is* A's input shape. You couldn't have invented A without secretly inventing B as its return half.
 
-The pattern isn't a clever construction. It's just **the only chain where A's output shape matches B's input shape**, *and* the "full vector replicated" state is preserved at the boundaries where the pointwise glue (residual, LN) lives. Everything snaps where it needs to snap.
+Now look at what the block actually does:
 
-A quick word on cost: a gather and an all-reduce move similar amounts of data per GPU (an all-reduce is essentially a reduce-scatter followed by an all-gather under the hood). v1 had **4 gathers** per block; v2 has **2 all-reduces**. Roughly half the comm, with no change to the model itself.
+- **Attention** has a *widen* (QKV projection: `d → k`) followed by a *narrow* (output projection: `k → d`).
+- **FFN** has a *widen* (`d → 4d`) followed by a *narrow* (`4d → d`).
+
+A widening matmul is exactly where A makes sense — there are lots of output features to spread across GPUs. A narrowing matmul is exactly where B makes sense — there are lots of input features to spread across GPUs, and the small output is something you sum back up.
+
+The block isn't accidentally A→B-friendly. It's **structurally** A→B-friendly: two widen-narrow pairs glued together by pointwise things. The "Megatron pattern" isn't really an algorithm someone designed. It's the only comm pattern that respects what the architecture was already doing. The duality of A and B and the widen-narrow rhythm of the block are the same fact told twice.
+
+A quick word on cost: a gather and an all-reduce move similar amounts of data per GPU (an all-reduce is roughly a reduce-scatter followed by an all-gather under the hood). v1 had **4 gathers** per block; v2 has **2 all-reduces** — half the comm, with no change to the model itself.
 
 ---
 
-## 6. One more check — multihead attention changes nothing
+## 6. Multi-head attention was pre-cut for this
 
-The QKV projection has output dim `k = h · d_head = 8 · 64 = 512`. When you split column-parallel on `k` with 2 GPUs, the cut **lands exactly between heads** — each GPU ends up owning 4 heads' worth of Q, K, V, sized `[4 × 256]` per GPU.
+Multi-head attention was invented years before tensor parallelism. The motivation was purely **modeling**: different heads should learn to attend to different relational patterns. So someone sliced the `k`-dimensional attention space into `h = 8` chunks of `d_head = 64` each, ran a separate attention on each chunk, concatenated the results, and carried on. A choice about *what the model can learn* — not about *how to run it on multiple GPUs*.
 
-Attention itself then runs **locally** on each GPU's 4 heads. Head 1 only mixes Head 1's queries and keys, Head 2 does its own thing, and they never need to peek at each other. So even though attention introduces a non-linearity (the per-head softmax over relative positions), that non-linearity stays *inside the GPU that owns the head*. **No inter-GPU comm, ever, inside attention.**
+Years later, TP came along and Strategy A needed something specific from the QKV cut: it needed **independent slabs** that could run a non-linear, sequence-mixing operation (attention) without ever syncing across GPUs.
 
-From the **comm perspective**, the multihead version is byte-for-byte identical to a single-head one. Same column cut on QKV, same row cut on output projection, same one all-reduce.
+That's a tall order. Most cuts of a neural network leave dependencies between the pieces — and the moment you have dependencies, you need comm.
 
-Multihead was a *modeling* choice — different heads learn to attend to different relational patterns. It just happens to make the column cut feel even more natural, because the cut respects head boundaries by construction. From the systems side, nothing about the comm pattern depends on whether you have one head or 32.
+But multi-head attention had already done the hard part. **Heads are independent by construction.** Head 1 only mixes Head 1's queries and keys, Head 2 does its own thing, and they never need to peek at each other. The independence is an architectural guarantee, written into the very definition of multi-head attention years before anyone was thinking about TP.
+
+Look at our setup: `h = 8` heads, 2 GPUs, 4 heads each. Strategy A's column cut on QKV (`k = 512` split into 256 per GPU) **lands exactly on a head boundary** — each GPU owns 4 whole heads. The per-head softmax — usually a sync point that ruins this kind of trick — runs entirely inside the GPU that owns the head. Even the non-linearity is local.
+
+That's the part the literature usually skims past. Multi-head attention was a gift the modelers accidentally left for the systems people. The cuts were already drawn, the independence guarantee was already established, the comm-free attention computation was already there. **TP just walked in and used them.** It didn't have to invent anything.
 
 ---
 
