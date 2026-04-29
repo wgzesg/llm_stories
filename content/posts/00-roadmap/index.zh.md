@@ -14,32 +14,16 @@ weight: 0
 
 这是一份学习笔记 —— 我自己在搞清楚现代 LLM 到底是怎么被 serve 起来的，主要靠跟 Claude 聊，然后把真正想明白的部分写下来。文章本身是用一种"发现之旅"的、比较自信的口吻写的，但底下其实就是一个普通人在公开学习。
 
-下面这张地图是**活的**。文章会从 `[wip]` 翻成 `[done]`，每写完一篇通常会带出两三个新问题 —— 那些就变成新的分支。所以这张图既会往前长，也会往侧面长。
+下面这张表是**活的** —— 文章会从 `[wip]` 翻成 `[done]`，新的方向冒出来时，roadmap 会跟着长。
 
-## 地图
+## 文章列表
 
-```
-01  Tensor parallelism 心智模型：从零搭起                          [done]
-    → /posts/01-tensor-parallelism-mental-model/
-    │
-    └─ 开出：「那如果要把多层堆到多个 GPU 上呢？」
-       │
-       ▼
-02  Pipeline parallelism 在 vanilla attn + FFN block 里怎么走     [wip]
-    走一遍 Megatron 在一个 block 里把 column-wise 和
-    row-wise TP 交错串起来的方式
-    │
-    ├─ 开出：「那 FFN 如果是 sparse 的呢？」
-    │  │
-    │  ▼
-    │  03  MoE —— 用 experts 替掉 FFN 之后，前面那套要怎么改      [planned]
-    │
-    └─ 开出：「那 batch 里 sequence length 不一样长呢？」
-       │
-       ▼
-       04  Continuous batching 和不等长 sequence                   [planned]
-           会把 vanilla attention 改成什么样
-```
+| # | 标题 | 状态 | 链接 |
+|---|---|---|---|
+| 01 | Tensor parallelism 心智模型：从零搭起 | `[done]` | [阅读 →](/llm_stories/zh/posts/01-tensor-parallelism-mental-model/) |
+| 02 | Pipeline parallelism 在 vanilla attn + FFN block 里怎么走 —— Megatron 在一个 block 里 column-wise 和 row-wise TP 的交错 | `[wip]` | — |
+| 03 | MoE —— 用 experts 替掉 FFN 之后，前面那套要怎么改 | `[planned]` | — |
+| 04 | Continuous batching 和不等长 sequence —— 会把 vanilla attention 改成什么样 | `[planned]` | — |
 
 ## 状态说明
 

@@ -14,32 +14,16 @@ weight: 0
 
 These are learning notes — me working through how modern LLMs are actually served, mostly by talking to Claude and writing up the parts that finally clicked. The articles themselves are written in a confident "discovery journey" voice, but the project underneath is just someone learning in public.
 
-The map below is **alive**. Articles flip from `[wip]` to `[done]` as they ship, and each one usually ends by surfacing two or three new questions — those become the next branches. So the roadmap will keep growing sideways as much as forward.
+The list below is **alive** — articles flip from `[wip]` to `[done]` as they ship, and the roadmap grows as new directions surface.
 
-## The map
+## Articles
 
-```
-01  Tensor parallelism, built from scratch in your head        [done]
-    → /posts/01-tensor-parallelism-mental-model/
-    │
-    └─ opens: "ok, but what about stacking layers across GPUs?"
-       │
-       ▼
-02  Pipeline parallelism in a vanilla attn + FFN block         [wip]
-    walking through Megatron's interleaving of column-wise
-    and row-wise TP across the block
-    │
-    ├─ opens: "what if FFN is sparse?"
-    │  │
-    │  ▼
-    │  03  MoE — what changes when experts replace FFN          [planned]
-    │
-    └─ opens: "what if the batch has uneven sequence lengths?"
-       │
-       ▼
-       04  Continuous batching & variable seq lengths           [planned]
-           and what that does to vanilla attention
-```
+| # | Title | Status | Link |
+|---|---|---|---|
+| 01 | Tensor parallelism, built from scratch in your head | `[done]` | [read →](/llm_stories/posts/01-tensor-parallelism-mental-model/) |
+| 02 | Pipeline parallelism in a vanilla attn + FFN block — walking through Megatron's column/row-wise TP interleaving | `[wip]` | — |
+| 03 | MoE — what changes when experts replace FFN | `[planned]` | — |
+| 04 | Continuous batching & variable sequence lengths — and what that does to vanilla attention | `[planned]` | — |
 
 ## Status legend
 
