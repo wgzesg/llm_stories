@@ -3,8 +3,8 @@ title: "Tensor Parallelism, Built From Scratch in Your Head"
 date: 2026-04-26T00:00:00+00:00
 draft: false
 summary: "Two ways to read a weight matrix, two ways to split it across GPUs. A mental model for tensor parallelism, derived from one matmul in a transformer's prefill phase."
-description: "A mental model for tensor parallelism — derived from one matmul in a transformer's prefill phase. Plus why multi-head attention was already pre-cut for column-parallel TP."
-tags: ["tensor-parallelism", "transformers", "llm-serving", "attention", "mental-model"]
+description: "A mental model for tensor parallelism — derived from one matmul in a transformer's prefill phase. Two ways to read a weight matrix, two ways to split it across GPUs."
+tags: ["tensor-parallelism", "transformers", "llm-serving", "mental-model"]
 series: ["llm-stories"]
 showToc: true
 TocOpen: false
@@ -212,51 +212,4 @@ This time you can't just concatenate — both GPUs produced length-`k` vectors t
 
 Same matrix. Two stories. Two ways to cut it. That's the whole game.
 
----
-
-## 8. Multi-head attention: the cuts were already there
-
-Time to apply this to a real piece of a transformer — the QKV projection in attention — and watch column-parallel TP fall out for free.
-
-### The setup
-
-The Q (or K, or V) projection turns each token (length `d`) into a query vector of length `k`. But `k` isn't arbitrary — it's structured:
-
-> `k  =  h × d_head`
-
-where `h` is the **number of heads** and `d_head` is the **per-head dimension**.
-
-So our row of `fx`es is *organized*. Group every `d_head` consecutive `fx`es together and call each group a **head**:
-
-```
-W_Q  =  [ fx1 ... fx(dh) │ fx(dh+1) ... fx(2·dh) │ ... │ fx((h-1)·dh+1) ... fxk ]
-         └── Head 1 ────┘  └──── Head 2 ─────────┘       └──── Head h ──────────┘
-```
-
-Head 1's `fx`es produce Head 1's query vector. Head 2's `fx`es produce Head 2's. Same matrix, same row of `fx`es — just organized into groups.
-
-> **Implementation note.** In practice this is one big matmul of shape `[d, h × d_head]`, not `h` separate ones — one large matrix multiply is dramatically faster on a GPU than many small ones. The "h heads" structure lives in *what each column means*, not in how many matrices there are. (Production codebases often go further and fuse Q, K, and V into a single `[d, 3 × h × d_head]` matmul.) Mathematically — and for training — it makes no difference. The head structure is purely a logical grouping.
-
-### Why heads make column-parallel feel inevitable
-
-Here's the punchline.
-
-Heads are **independent** during the attention computation itself. Head 1's attention only mixes Head 1's queries with Head 1's keys; Head 2 does its own thing with its own stuff; they never peek at each other. The heads only get combined back together at the very end, by a separate matrix (the output projection).
-
-So if you're going to split the `fx`es column-wise across GPUs anyway (Strategy A from section 5)... split **between heads**:
-
-```
-W_Q  =  [ Head 1  │  Head 2  │  Head 3  │  Head 4 ]
-            ↑         ↑           ↑          ↑
-            └── GPU 1 ─┘           └── GPU 2 ──┘
-```
-
-Each GPU owns some heads. It computes *its* heads' Q, K, V *and* runs their attention end-to-end on its own. **Zero communication during attention itself.** Each GPU is doing its own private mini-attention.
-
-### The aha
-
-Multi-head attention wasn't designed for tensor parallelism. It was designed because different heads learn to attend to different relational patterns in the input — that's a modeling choice, not a systems one.
-
-But when TP came along, it walked in and noticed: *attention was already pre-sliced into independent slabs called "heads."* It didn't have to invent anything. It just respected the cuts that were already there.
-
-This is the cleanest column-parallel TP case in a real transformer — and it falls directly out of Story A. The matrix is a row of `fx`es; the `fx`es are grouped into heads; heads are independent; therefore split on head boundaries. One mental model the whole way down.
+That's where this article stops. Two strategies, applied to **one** matrix in isolation. The next article picks them up and walks them through a full attention block — Megatron's recipe for interleaving column-parallel and row-parallel TP across the matmuls of a real layer. Same two cuts, woven on purpose.
