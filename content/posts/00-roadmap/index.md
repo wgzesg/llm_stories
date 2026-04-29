@@ -21,9 +21,10 @@ The list below is **alive** — articles flip from `[wip]` to `[done]` as they s
 | # | Title | Status | Link |
 |---|---|---|---|
 | 01 | Tensor parallelism, built from scratch in your head | `[done]` | [read →](/llm_stories/posts/01-tensor-parallelism-mental-model/) |
-| 02 | Pipeline parallelism in a vanilla attn + FFN block — walking through Megatron's column/row-wise TP interleaving | `[wip]` | — |
-| 03 | MoE — what changes when experts replace FFN | `[planned]` | — |
-| 04 | Continuous batching & variable sequence lengths — and what that does to vanilla attention | `[planned]` | — |
+| 02 | Walking TP through a full block — start with column-parallel everywhere, watch the comm explode, pair with row-parallel until two all-reduces per block fall out (the Megatron pattern) | `[wip]` | [read →](/llm_stories/posts/02-tp-through-a-full-block/) |
+| 03 | Pipeline parallelism — the cut *across* blocks instead of within one | `[planned]` | — |
+| 04 | MoE — what changes when experts replace FFN | `[planned]` | — |
+| 05 | Continuous batching & variable sequence lengths — and what that does to vanilla attention | `[planned]` | — |
 
 ## Status legend
 
