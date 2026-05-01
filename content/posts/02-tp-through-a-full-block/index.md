@@ -87,46 +87,84 @@ What's the obvious first move? From article 01, Strategy A was:
 - on QKV it happens to **land exactly on head boundaries** — `k = 8 · 64 = 512`, split into 256 per GPU = 4 heads each;
 - and "full input in, half output out" is the easier story to picture.
 
-So apply A to all four matmuls. Walk through the block one step at a time, watching the shape that **each** GPU holds. In the trace below, `(A)` next to a matmul means "Strategy A: full input → half output."
+So apply A to all four matmuls. Walk through the block one step at a time, watching what each GPU holds — its **weight shard**, **input**, and **output** at every step.
 
-```
-Step                                Each GPU holds              Comm
-─────────────────────────────────────────────────────────────────────────
-input                               [4 × 512]   full            —
-LayerNorm                           [4 × 512]   full            — (redundant)
-QKV proj      (A: full→half)        [4 × 768]   its 4 heads of QKV   —
-attention                           [4 × 256]   its 4 heads' out     —
+<table class="tp-trace">
+<thead>
+<tr><th>Step</th><th>GPU 1</th><th>GPU 2</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td class="step-label">input</td>
+  <td><code>[4×512]</code> full</td>
+  <td><code>[4×512]</code> full</td>
+</tr>
+<tr>
+  <td class="step-label">LayerNorm <span class="note">(redundant)</span></td>
+  <td>in <code>[4×512]</code> → out <code>[4×512]</code></td>
+  <td>in <code>[4×512]</code> → out <code>[4×512]</code></td>
+</tr>
+<tr>
+  <td class="step-label">QKV proj (A)</td>
+  <td>W <code>[512×768]</code> (heads 1–4)<br>in <code>[4×512]</code> → out <code>[4×768]</code><br><span class="note">= Q+K+V for heads 1–4, each <code>[4×256]</code></span></td>
+  <td>W <code>[512×768]</code> (heads 5–8)<br>in <code>[4×512]</code> → out <code>[4×768]</code><br><span class="note">= Q+K+V for heads 5–8, each <code>[4×256]</code></span></td>
+</tr>
+<tr>
+  <td class="step-label">attention</td>
+  <td>heads 1–4<br>in <code>[4×768]</code> → out <code>[4×256]</code></td>
+  <td>heads 5–8<br>in <code>[4×768]</code> → out <code>[4×256]</code></td>
+</tr>
+<tr class="sync">
+  <td colspan="3"><span class="star">★</span> GATHER #1 — output proj needs full <code>k=512</code>, each GPU only holds 256 → <code>[4×512]</code> on both</td>
+</tr>
+<tr>
+  <td class="step-label">output proj (A)</td>
+  <td>W <code>[512×256]</code><br>in <code>[4×512]</code> → out <code>[4×256]</code></td>
+  <td>W <code>[512×256]</code><br>in <code>[4×512]</code> → out <code>[4×256]</code></td>
+</tr>
+<tr class="sync">
+  <td colspan="3"><span class="star">★</span> GATHER #2 — residual needs full <code>d=512</code>, output is half <code>d=256</code> → <code>[4×512]</code> on both</td>
+</tr>
+<tr>
+  <td class="step-label">+ residual</td>
+  <td><code>[4×512]</code> → <code>[4×512]</code></td>
+  <td><code>[4×512]</code> → <code>[4×512]</code></td>
+</tr>
+<tr>
+  <td class="step-label">LayerNorm <span class="note">(redundant)</span></td>
+  <td>in <code>[4×512]</code> → out <code>[4×512]</code></td>
+  <td>in <code>[4×512]</code> → out <code>[4×512]</code></td>
+</tr>
+<tr>
+  <td class="step-label">FFN-up (A)</td>
+  <td>W <code>[512×1024]</code><br>in <code>[4×512]</code> → out <code>[4×1024]</code></td>
+  <td>W <code>[512×1024]</code><br>in <code>[4×512]</code> → out <code>[4×1024]</code></td>
+</tr>
+<tr>
+  <td class="step-label">activation <span class="note">(pointwise)</span></td>
+  <td><code>[4×1024]</code> → <code>[4×1024]</code></td>
+  <td><code>[4×1024]</code> → <code>[4×1024]</code></td>
+</tr>
+<tr class="sync">
+  <td colspan="3"><span class="star">★</span> GATHER #3 — FFN-down needs full <code>4d=2048</code>, each GPU only holds 1024 → <code>[4×2048]</code> on both</td>
+</tr>
+<tr>
+  <td class="step-label">FFN-down (A)</td>
+  <td>W <code>[2048×256]</code><br>in <code>[4×2048]</code> → out <code>[4×256]</code></td>
+  <td>W <code>[2048×256]</code><br>in <code>[4×2048]</code> → out <code>[4×256]</code></td>
+</tr>
+<tr class="sync">
+  <td colspan="3"><span class="star">★</span> GATHER #4 — residual needs full <code>d=512</code>, output is half <code>d=256</code> → <code>[4×512]</code> on both</td>
+</tr>
+<tr>
+  <td class="step-label">+ residual</td>
+  <td><code>[4×512]</code> → <code>[4×512]</code></td>
+  <td><code>[4×512]</code> → <code>[4×512]</code></td>
+</tr>
+</tbody>
+</table>
 
-                                    ↓ next matmul (output proj) is also A,
-                                    ↓ which needs the FULL k=512 input,
-                                    ↓ but each GPU only holds 256.
-
-GATHER                              [4 × 512]   full            ★ gather #1
-output proj   (A: full→half)        [4 × 256]   half of d output     —
-
-                                    ↓ next is + residual; residual is full d=512,
-                                    ↓ output is split d=256.
-
-GATHER                              [4 × 512]   full            ★ gather #2
-+ residual                          [4 × 512]   full            —
-LayerNorm                           [4 × 512]   full            — (redundant)
-
-FFN-up        (A: full→half)        [4 × 1024]  half FFN-hidden      —
-activation                          [4 × 1024]  half (pointwise)     —
-
-                                    ↓ next matmul (FFN-down) is A; needs FULL
-                                    ↓ 4d=2048 input, each GPU only has 1024.
-
-GATHER                              [4 × 2048]  full            ★ gather #3
-FFN-down      (A: full→half)        [4 × 256]   half of d output     —
-
-                                    ↓ next is + residual; full d=512 needed.
-
-GATHER                              [4 × 512]   full            ★ gather #4
-+ residual                          [4 × 512]   full            —
-```
-
-**Four cross-GPU gathers per block.** Per forward pass. (And another four in backward.)
+**Four cross-GPU gathers per block.**
 
 Two of them happen because the next A-style matmul demands a full input. The other two happen because the residual add expects a full vector and we just produced a half one. Same root cause: **Strategy A produces a half output, and almost everything downstream wants a full input.**
 
@@ -136,7 +174,7 @@ Two of them happen because the next A-style matmul demands a full input. The oth
 
 Cross-GPU comm is the *slow* thing in distributed compute. The whole point of TP design is to do as few of these as possible. v1 has us paying for a gather in front of nearly every operation that needs full features.
 
-For a 32-block model that's ~130 cross-GPU comms per forward pass — and we doubled it for backward. Way too many.
+For a 32-block model that's ~130 cross-GPU comms per forward pass. Way too many.
 
 So the question becomes:
 
@@ -161,30 +199,74 @@ So replace v1's "A → gather → A" with "A → B." B eats the half output dire
 
 Apply this to the block — pair every A matmul with a B matmul:
 
-```
-Step                                Each GPU holds              Comm
-─────────────────────────────────────────────────────────────────────────
-input                               [4 × 512]   full            —
-LayerNorm                           [4 × 512]   full            — (redundant)
-QKV proj      (A: full→half)        [4 × 768]   its 4 heads of QKV   —
-attention                           [4 × 256]   its 4 heads' out     —
-output proj   (B: half→sum)         [4 × 512]   partial sum     —
-
-                                    ↓ need full for + residual / LN
-
-ALL-REDUCE                          [4 × 512]   full            ★ all-reduce #1
-+ residual                          [4 × 512]   full            —
-LayerNorm                           [4 × 512]   full            — (redundant)
-
-FFN-up        (A: full→half)        [4 × 1024]  half FFN-hidden      —
-activation                          [4 × 1024]  half (pointwise)     —
-FFN-down      (B: half→sum)         [4 × 512]   partial sum     —
-
-                                    ↓ need full for + residual / LN
-
-ALL-REDUCE                          [4 × 512]   full            ★ all-reduce #2
-+ residual                          [4 × 512]   full            —
-```
+<table class="tp-trace">
+<thead>
+<tr><th>Step</th><th>GPU 1</th><th>GPU 2</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td class="step-label">input</td>
+  <td><code>[4×512]</code> full</td>
+  <td><code>[4×512]</code> full</td>
+</tr>
+<tr>
+  <td class="step-label">LayerNorm <span class="note">(redundant)</span></td>
+  <td>in <code>[4×512]</code> → out <code>[4×512]</code></td>
+  <td>in <code>[4×512]</code> → out <code>[4×512]</code></td>
+</tr>
+<tr>
+  <td class="step-label">QKV proj (A)</td>
+  <td>W <code>[512×768]</code> (heads 1–4)<br>in <code>[4×512]</code> → out <code>[4×768]</code><br><span class="note">= Q+K+V for heads 1–4, each <code>[4×256]</code></span></td>
+  <td>W <code>[512×768]</code> (heads 5–8)<br>in <code>[4×512]</code> → out <code>[4×768]</code><br><span class="note">= Q+K+V for heads 5–8, each <code>[4×256]</code></span></td>
+</tr>
+<tr>
+  <td class="step-label">attention</td>
+  <td>heads 1–4<br>in <code>[4×768]</code> → out <code>[4×256]</code></td>
+  <td>heads 5–8<br>in <code>[4×768]</code> → out <code>[4×256]</code></td>
+</tr>
+<tr>
+  <td class="step-label">output proj (B)</td>
+  <td>W <code>[256×512]</code><br>in <code>[4×256]</code> → out <code>[4×512]</code> <span class="note">(partial sum)</span></td>
+  <td>W <code>[256×512]</code><br>in <code>[4×256]</code> → out <code>[4×512]</code> <span class="note">(partial sum)</span></td>
+</tr>
+<tr class="sync">
+  <td colspan="3"><span class="star">★</span> ALL-REDUCE #1 — sum the two partial <code>[4×512]</code> halves into the full <code>[4×512]</code> on both GPUs (residual + LN need it)</td>
+</tr>
+<tr>
+  <td class="step-label">+ residual</td>
+  <td><code>[4×512]</code> → <code>[4×512]</code></td>
+  <td><code>[4×512]</code> → <code>[4×512]</code></td>
+</tr>
+<tr>
+  <td class="step-label">LayerNorm <span class="note">(redundant)</span></td>
+  <td>in <code>[4×512]</code> → out <code>[4×512]</code></td>
+  <td>in <code>[4×512]</code> → out <code>[4×512]</code></td>
+</tr>
+<tr>
+  <td class="step-label">FFN-up (A)</td>
+  <td>W <code>[512×1024]</code><br>in <code>[4×512]</code> → out <code>[4×1024]</code></td>
+  <td>W <code>[512×1024]</code><br>in <code>[4×512]</code> → out <code>[4×1024]</code></td>
+</tr>
+<tr>
+  <td class="step-label">activation <span class="note">(pointwise)</span></td>
+  <td><code>[4×1024]</code> → <code>[4×1024]</code></td>
+  <td><code>[4×1024]</code> → <code>[4×1024]</code></td>
+</tr>
+<tr>
+  <td class="step-label">FFN-down (B)</td>
+  <td>W <code>[1024×512]</code><br>in <code>[4×1024]</code> → out <code>[4×512]</code> <span class="note">(partial sum)</span></td>
+  <td>W <code>[1024×512]</code><br>in <code>[4×1024]</code> → out <code>[4×512]</code> <span class="note">(partial sum)</span></td>
+</tr>
+<tr class="sync">
+  <td colspan="3"><span class="star">★</span> ALL-REDUCE #2 — sum the two partial <code>[4×512]</code> halves into the full <code>[4×512]</code> on both GPUs (residual + LN need it)</td>
+</tr>
+<tr>
+  <td class="step-label">+ residual</td>
+  <td><code>[4×512]</code> → <code>[4×512]</code></td>
+  <td><code>[4×512]</code> → <code>[4×512]</code></td>
+</tr>
+</tbody>
+</table>
 
 **Two all-reduces per block.**
 
@@ -214,25 +296,29 @@ A quick word on cost: a gather and an all-reduce move similar amounts of data pe
 
 ---
 
-## 6. Multi-head attention was pre-cut for this
+## 6. Why the cut has to land on a head boundary
 
-Multi-head attention was invented years before tensor parallelism. The motivation was purely **modeling**: different heads should learn to attend to different relational patterns. So someone sliced the `k`-dimensional attention space into `h = 8` chunks of `d_head = 64` each, ran a separate attention on each chunk, concatenated the results, and carried on. A choice about *what the model can learn* — not about *how to run it on multiple GPUs*.
+The v2 trace quietly assumed something: that QKV's column cut splits `k = 512` into two slabs of 256 along the **head boundary**, so each GPU owns 4 whole heads. That assumption is doing more work than it looks like. Try the counterfactual.
 
-Years later, TP came along and Strategy A needed something specific from the QKV cut: it needed **independent slabs** that could run a non-linear, sequence-mixing operation (attention) without ever syncing across GPUs.
+Imagine **single-head attention** — same `k = 512`, but one head, no head structure. Apply Strategy A on QKV exactly as before: each GPU gets `Q, K, V` each of shape `[4 × 256]`. Now run attention.
 
-That's a tall order. Most cuts of a neural network leave dependencies between the pieces — and the moment you have dependencies, you need comm.
+The first step is `Q Kᵀ`. Each GPU computes `Q_half @ K_halfᵀ`, producing a `[4 × 4]` matrix — but that matrix is a **partial sum** over the 256 features each GPU happens to hold. The true scores are the sum of both GPUs' partials.
 
-But multi-head attention had already done the hard part. **Heads are independent by construction.** Head 1 only mixes Head 1's queries and keys, Head 2 does its own thing, and they never need to peek at each other. The independence is an architectural guarantee, written into the very definition of multi-head attention years before anyone was thinking about TP.
+Here's the problem: the next step is **softmax**. Softmax is non-linear, so you can't apply it locally and reconcile after — `softmax(a) + softmax(b) ≠ softmax(a + b)`. The reduction has to happen *before* softmax. Which means an extra sync sitting right in the middle of attention:
 
-Look at our setup: `h = 8` heads, 2 GPUs, 4 heads each. Strategy A's column cut on QKV (`k = 512` split into 256 per GPU) **lands exactly on a head boundary** — each GPU owns 4 whole heads. The per-head softmax — usually a sync point that ruins this kind of trick — runs entirely inside the GPU that owns the head. Even the non-linearity is local.
+> ★ ALL-REDUCE on the `[n × n]` scores, before softmax.
 
-That's the part the literature usually skims past. Multi-head attention was a gift the modelers accidentally left for the systems people. The cuts were already drawn, the independence guarantee was already established, the comm-free attention computation was already there. **TP just walked in and used them.** It didn't have to invent anything.
+That's a third all-reduce per block, on top of v2's two. The Megatron pattern collapses to *three* sync points, and the new one is on a tensor that scales with sequence length squared — exactly the comm you most want to avoid.
+
+The fix is structural, not algorithmic: don't let the cut cross a head. **Each head's `Q Kᵀ` must live entirely on one GPU**, so the partial-sum problem never arises. Multi-head attention gives that to us for free — heads are independent by construction, head boundaries are natural cut points, and the column split on `k = h · d_head` lands exactly between them whenever `h` divides evenly across GPUs.
+
+So multi-head isn't a happy coincidence the systems people exploited. It's the **structural prerequisite** for v2 to exist at all. Pick any cut that lands inside a head, and softmax forces a sync that ruins everything. Pick a cut that lands between heads, and the non-linearity stays local. The Megatron pattern doesn't just *happen* to work on multi-head architectures — it requires them.
 
 ---
 
 ## 7. What this opens
 
-You now have **one block** running on two GPUs with two all-reduces per forward pass. That earns the next round of "wait, but what about..." questions:
+You now have **one block** running on two GPUs with two all-reduces per pass. That earns the next round of "wait, but what about..." questions:
 
 - **What if I have many blocks and many GPUs?** TP cuts *within* a block. The cut *across* blocks — staging entire blocks on different GPUs and pipelining microbatches through them — is a different beast. **Pipeline parallelism**, next article.
 - **What if FFN is replaced with experts?** The column-then-row pattern still applies to each expert's matmuls, but routing tokens to the right expert introduces a new kind of comm. **MoE**, soon.

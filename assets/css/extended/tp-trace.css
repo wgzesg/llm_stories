@@ -1,0 +1,66 @@
+/* Trace tables: per-GPU lanes with full-width sync rows. */
+.tp-trace {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5rem 0;
+    font-size: 0.92em;
+    table-layout: fixed;
+}
+
+.tp-trace th,
+.tp-trace td {
+    border: 1px solid var(--border);
+    padding: 0.55rem 0.75rem;
+    vertical-align: top;
+    text-align: left;
+}
+
+.tp-trace thead th {
+    background: var(--code-bg);
+    font-weight: 600;
+}
+
+.tp-trace th:first-child,
+.tp-trace td:first-child {
+    width: 22%;
+    font-weight: 500;
+    color: var(--secondary);
+}
+
+.tp-trace .step-label {
+    font-weight: 600;
+    color: var(--primary);
+}
+
+.tp-trace .gpu-cell code {
+    background: transparent;
+    padding: 0;
+    font-size: 0.95em;
+}
+
+/* Sync rows: full-width, visually distinct so the eye registers "everyone stops here". */
+.tp-trace .sync td {
+    background: rgba(255, 200, 60, 0.12);
+    border-top: 2px solid #d4a017;
+    border-bottom: 2px solid #d4a017;
+    text-align: center;
+    font-weight: 600;
+}
+
+.dark .tp-trace .sync td {
+    background: rgba(255, 200, 60, 0.08);
+    border-top-color: #b8860b;
+    border-bottom-color: #b8860b;
+}
+
+.tp-trace .sync .star {
+    color: #d4a017;
+    margin-right: 0.4em;
+}
+
+.tp-trace .note {
+    color: var(--secondary);
+    font-style: italic;
+    font-size: 0.92em;
+    margin-top: 0.3rem;
+}
