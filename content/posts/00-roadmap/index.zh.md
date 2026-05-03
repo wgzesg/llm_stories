@@ -24,7 +24,7 @@ weight: 1
 |---|---|---|---|
 | 01 | Tensor parallelism 心智模型：从零搭起 | `[done]` | [阅读 →](/llm_stories/zh/posts/01-tensor-parallelism-mental-model/) |
 | 02 | 在一个 transformer block 中完整走完一遍 Tensor Parallelism —— 先全用 column-parallel 看通信怎么爆掉，再配上 row-parallel 落到每个 block 两次 all-reduce | `[done]` | [阅读 →](/llm_stories/zh/posts/02-tp-through-a-full-block/) |
-| 03 | 一次 forward 怎么塞下很多个 request —— varlen attention，只考虑 prefill，TP 完全没动到 | `[done]` | [阅读 →](/llm_stories/posts/03-batching-many-requests/) |
+| 03 | 一次 forward 怎么塞下很多个 request —— varlen attention，只考虑 prefill，TP 完全没动到 | `[done]` | [阅读 →](/llm_stories/zh/posts/03-batching-many-requests/) |
 | 04 | Decode 和 continuous batching —— 时间维度，KV cache，ORCA 那种 iteration-level 调度，为什么 decode 是 bandwidth-bound | `[next]` | — |
 | 05 | Chunked prefill —— 一次 prefill 装不下一个 batch 时，怎么用切块让它跟在飞的 decode 共存 | `[planned]` | — |
 | 06 | Pipeline parallelism —— 切 *跨* block 而不是 block *内部*，以及它带来的 bubble | `[planned]` | — |
