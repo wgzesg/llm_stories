@@ -8,7 +8,7 @@ tags: ["tensor-parallelism", "transformers", "llm-serving", "megatron", "mental-
 series: ["llm-stories"]
 showToc: true
 TocOpen: false
-weight: 2
+weight: 3
 ---
 
 [Article 01](/llm_stories/posts/01-tensor-parallelism-mental-model/) left you with two ways to split **one** matmul across two GPUs. They're easier to keep straight by what they *do* than by what they're called in the literature, so let's lay them out side by side:

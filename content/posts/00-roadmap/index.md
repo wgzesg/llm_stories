@@ -7,7 +7,7 @@ description: "A living roadmap of the LLM Stories series. Tracks shipped article
 tags: ["meta"]
 series: ["llm-stories"]
 showToc: false
-weight: 0
+weight: 1
 ---
 
 ## About this series

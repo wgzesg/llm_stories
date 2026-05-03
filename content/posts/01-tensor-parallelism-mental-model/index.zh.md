@@ -8,7 +8,7 @@ tags: ["tensor-parallelism", "transformers", "llm-serving", "attention", "mental
 series: ["llm-stories"]
 showToc: true
 TocOpen: false
-weight: 1
+weight: 2
 ---
 
 这不是一份教程。这是一段在你脑子里搭 mental model 的旅程 —— 每读完一节，你会忍不住想 *"哦，原来就这么回事？"*。读到最后，tensor parallelism 不再是一个工程上的奇技淫巧。在那个场景下，它会变成 —— **你能想到的最自然不过的两个选择**。

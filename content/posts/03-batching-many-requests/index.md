@@ -8,7 +8,7 @@ tags: ["batching", "varlen-attention", "selective-batching", "llm-serving", "men
 series: ["llm-stories"]
 showToc: true
 TocOpen: false
-weight: 3
+weight: 4
 ---
 
 [Article 02](/llm_stories/posts/02-tp-through-a-full-block/) left us with one transformer block running on two GPUs in two all-reduces per layer. But a real serving system has many users hitting the model concurrently — and their prompts are all different lengths. A 50-token *"what time is it"* sits next to a 5,000-token essay draft.

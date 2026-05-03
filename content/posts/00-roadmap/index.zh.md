@@ -7,7 +7,7 @@ description: "LLM Stories 系列的活地图。记录已发表的文章，以及
 tags: ["meta"]
 series: ["llm-stories"]
 showToc: false
-weight: 0
+weight: 1
 ---
 
 ## 这个系列是什么
