@@ -16,8 +16,8 @@ weight: 3
 |                          | **Strategy A** — *split the `fx`es*                  | **Strategy B** — *split the rows*                            |
 |--------------------------|--------------------------------------------------------|----------------------------------------------------------------|
 | What you slice           | the matrix's columns (each column is one `fx`)         | the matrix's rows (each row is a basis vector)                 |
-| Each GPU's **input**     | the **full** input vector                              | **half** of the input features                                 |
-| Each GPU's **output**    | **half** of the output features                        | a **partial sum** of the *full* output                         |
+| Each GPU's **input**     | each token's **full** input vector                    | **half** of each token's input features                        |
+| Each GPU's **output**    | **half** of each token's output features              | a **partial sum** of each token's *full* output                |
 | How outputs combine      | **concatenate** (free)                                 | **all-reduce** (one comm step)                                 |
 | Also known as            | column-parallel                                        | row-parallel                                                   |
 
