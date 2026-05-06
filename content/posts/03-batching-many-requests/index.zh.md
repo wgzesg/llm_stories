@@ -322,7 +322,7 @@ article 02 的收尾说，multi-head attention 是 modeler 留给做系统的人
 
 ---
 
-## 8. 关于代价的几句直觉
+## 8. 计算量分析
 
 把 request flatten 起来之后，时间到底花在哪里，老实讲几句。
 
@@ -335,7 +335,41 @@ article 02 的收尾说，multi-head attention 是 modeler 留给做系统的人
 - **10 个 request × 每个 1,000 token** —— attention 的活是 `10 × 1000² = 10⁷`（per head per layer）。大。**Attention 主导**整次 forward。
 - **1,000 个 request × 每个 10 token** —— attention 的活是 `1000 × 10² = 10⁵`，少了 100 倍。**Linear 主导。**
 
-attention 的 L² scaling 意味着：长上下文 batch 是 attention-compute-bound；短 request 多的 batch 是 linear-bandwidth-bound。flatten 这套招在两种 regime 下都一样，但瓶颈换了位置。
+其实就是 §6.2 那张 varlen 方块图，被推到了两个极端。把全部 10,000 个 token 摆在 attention 矩阵的一条边上，varlen 真正会算的只有 per-request 那些对角块，剩下的都是跨 request 的格子，直接跳过：
+
+<svg viewBox="0 0 760 480" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto;font-family:system-ui,sans-serif;display:block;margin:1.5rem auto">
+  <defs>
+    <pattern id="hatch-cost-zh" patternUnits="userSpaceOnUse" width="10" height="10" patternTransform="rotate(45)">
+      <rect width="10" height="10" fill="rgba(150,150,150,0.06)"/>
+      <line x1="0" y1="0" x2="0" y2="10" stroke="rgba(150,150,150,0.4)" stroke-width="1.5"/>
+    </pattern>
+  </defs>
+  <text x="380" y="25" text-anchor="middle" font-size="14" fill="currentColor" font-weight="600">总 token 数都是 10,000，attention 的活差很多</text>
+  <text x="380" y="46" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.65">彩色 = per-request 真正算的部分；斜纹 = 跨 request，varlen 直接跳过</text>
+  <rect x="60" y="80" width="280" height="280" fill="url(#hatch-cost-zh)" stroke="rgba(150,150,150,0.5)" stroke-width="1.5"/>
+  <g fill="rgba(74,144,226,0.45)" stroke="#4a90e2" stroke-width="1">
+    <rect x="60"  y="80"  width="28" height="28"/>
+    <rect x="88"  y="108" width="28" height="28"/>
+    <rect x="116" y="136" width="28" height="28"/>
+    <rect x="144" y="164" width="28" height="28"/>
+    <rect x="172" y="192" width="28" height="28"/>
+    <rect x="200" y="220" width="28" height="28"/>
+    <rect x="228" y="248" width="28" height="28"/>
+    <rect x="256" y="276" width="28" height="28"/>
+    <rect x="284" y="304" width="28" height="28"/>
+    <rect x="312" y="332" width="28" height="28"/>
+  </g>
+  <text x="200" y="385" text-anchor="middle" font-size="13" fill="currentColor" font-weight="600">10 个 request × 每个 1,000 token</text>
+  <text x="200" y="408" text-anchor="middle" font-size="12" fill="currentColor" font-family="ui-monospace,monospace">10 × 1000² = 10⁷</text>
+  <text x="200" y="430" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">attention 主导整次 forward</text>
+  <rect x="440" y="80" width="280" height="280" fill="url(#hatch-cost-zh)" stroke="rgba(150,150,150,0.5)" stroke-width="1.5"/>
+  <line x1="440" y1="80" x2="720" y2="360" stroke="#f5a623" stroke-width="2.5" stroke-linecap="square"/>
+  <text x="580" y="385" text-anchor="middle" font-size="13" fill="currentColor" font-weight="600">1,000 个 request × 每个 10 token</text>
+  <text x="580" y="408" text-anchor="middle" font-size="12" fill="currentColor" font-family="ui-monospace,monospace">1000 × 10² = 10⁵</text>
+  <text x="580" y="430" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">对角块缩成一根细线；linear 主导</text>
+</svg>
+
+外框一样大，总 token 数一样，但彩色那一块——真正会算的部分——从左到右缩了 100 倍。attention 的 L² scaling 意味着：长上下文 batch 是 attention-compute-bound；短 request 多的 batch 是 linear-bandwidth-bound。flatten 这套招在两种 regime 下都一样，但瓶颈换了位置。
 
 这也是 decode 那一篇的预告：当每个"request"一次只生成一个 token 时，per-request 的 `Q_i K_i.T` 退化成一个 `1 × L_kv` 的向量乘上一个 `L_kv × d_head` 的矩阵。arithmetic intensity 掉到 ~1，per-request 的 matmul 不再"够大"，整次 forward 变成被 weight 的 bandwidth 卡住的状态。完全不一样的优化目标 —— 这就是为什么 decode 自成一篇。
 

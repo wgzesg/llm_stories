@@ -335,7 +335,41 @@ Imagine two batches with the same total token count:
 - **10 requests × 1,000 tokens each** — attention work is `10 × 1000² = 10⁷` per head per layer. Big. **Attention dominates** the forward pass.
 - **1,000 requests × 10 tokens each** — attention work is `1000 × 10² = 10⁵`. A hundred times less. **Linears dominate.**
 
-The L²-scaling of attention means long-context batches are attention-compute-bound while many-short batches are linear-bandwidth-bound. The flat-tensor trick is the same in both regimes; the bottleneck shifts.
+It's the same picture as the varlen square from §6.2, just at the two extremes. Place all 10,000 tokens along one axis of the attention matrix and only the per-request diagonal blocks ever get computed — everything else is cross-request and skipped:
+
+<svg viewBox="0 0 760 480" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto;font-family:system-ui,sans-serif;display:block;margin:1.5rem auto">
+  <defs>
+    <pattern id="hatch-cost" patternUnits="userSpaceOnUse" width="10" height="10" patternTransform="rotate(45)">
+      <rect width="10" height="10" fill="rgba(150,150,150,0.06)"/>
+      <line x1="0" y1="0" x2="0" y2="10" stroke="rgba(150,150,150,0.4)" stroke-width="1.5"/>
+    </pattern>
+  </defs>
+  <text x="380" y="25" text-anchor="middle" font-size="14" fill="currentColor" font-weight="600">same 10,000 total tokens, very different attention work</text>
+  <text x="380" y="46" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.65">colored = per-request work that's actually computed; hatched = cross-request, skipped by varlen</text>
+  <rect x="60" y="80" width="280" height="280" fill="url(#hatch-cost)" stroke="rgba(150,150,150,0.5)" stroke-width="1.5"/>
+  <g fill="rgba(74,144,226,0.45)" stroke="#4a90e2" stroke-width="1">
+    <rect x="60"  y="80"  width="28" height="28"/>
+    <rect x="88"  y="108" width="28" height="28"/>
+    <rect x="116" y="136" width="28" height="28"/>
+    <rect x="144" y="164" width="28" height="28"/>
+    <rect x="172" y="192" width="28" height="28"/>
+    <rect x="200" y="220" width="28" height="28"/>
+    <rect x="228" y="248" width="28" height="28"/>
+    <rect x="256" y="276" width="28" height="28"/>
+    <rect x="284" y="304" width="28" height="28"/>
+    <rect x="312" y="332" width="28" height="28"/>
+  </g>
+  <text x="200" y="385" text-anchor="middle" font-size="13" fill="currentColor" font-weight="600">10 requests × 1,000 tokens</text>
+  <text x="200" y="408" text-anchor="middle" font-size="12" fill="currentColor" font-family="ui-monospace,monospace">10 × 1000² = 10⁷</text>
+  <text x="200" y="430" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">attention dominates the forward pass</text>
+  <rect x="440" y="80" width="280" height="280" fill="url(#hatch-cost)" stroke="rgba(150,150,150,0.5)" stroke-width="1.5"/>
+  <line x1="440" y1="80" x2="720" y2="360" stroke="#f5a623" stroke-width="2.5" stroke-linecap="square"/>
+  <text x="580" y="385" text-anchor="middle" font-size="13" fill="currentColor" font-weight="600">1,000 requests × 10 tokens</text>
+  <text x="580" y="408" text-anchor="middle" font-size="12" fill="currentColor" font-family="ui-monospace,monospace">1000 × 10² = 10⁵</text>
+  <text x="580" y="430" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">diagonal blocks shrink to a hairline; linears dominate</text>
+</svg>
+
+Same outer square. Same total tokens. The colored fraction — what actually gets computed — collapses by 100× as you go from few-long to many-short. The L²-scaling of attention means long-context batches are attention-compute-bound while many-short batches are linear-bandwidth-bound. The flat-tensor trick is the same in both regimes; the bottleneck shifts.
 
 This is also the foreshadowing for decode: when each "request" generates one token at a time, per-request `Q_i K_i.T` becomes a `1 × L_kv` vector times an `L_kv × d_head` matrix. Arithmetic intensity drops to ~1, the per-request matmul stops being meaty, and the entire forward pass becomes bandwidth-bound on weight reads. That's a fundamentally different optimization target — and it's why decode lives in its own article.
 
