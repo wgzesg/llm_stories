@@ -1,8 +1,8 @@
 # LLM Stories
 
-A series of essays building up *mental models* for how modern LLMs are actually served — written in plain language, no math notation, lots of pictures made of ASCII.
+A series of essays building up *mental models* for how modern LLMs are actually served — written in plain language, no math notation, lots of diagrams.
 
-📖 **Live site**: https://wgzesg.github.io/llm_stories/ *(update once Pages is enabled)*
+📖 **Live site**: https://wgzesg.github.io/llm_stories/
 
 The goal isn't to teach you the equations. It's to build the **intuitions** that make every later equation feel inevitable. Each article picks one slice of the LLM serving pipeline and walks through it as a discovery journey — the kind where each section ends with *"oh, that's all it is?"*
 
@@ -14,24 +14,12 @@ Most articles come in two languages: English and 中文. The Chinese versions ke
 
 | # | Title | English | 中文 |
 |---|---|---|---|
-| 01 | Tensor parallelism, built from scratch in your head | [index.md](content/posts/01-tensor-parallelism-mental-model/index.md) | [index.zh.md](content/posts/01-tensor-parallelism-mental-model/index.zh.md) |
+| 01 | An LLM, end to end | [index.md](content/posts/01-llm-end-to-end/index.md) | — |
+| 02 | Tensor parallelism, built from scratch in your head | [index.md](content/posts/02-tensor-parallelism-mental-model/index.md) | [index.zh.md](content/posts/02-tensor-parallelism-mental-model/index.zh.md) |
+| 03 | Walking tensor parallelism through a full block | [index.md](content/posts/03-tp-through-a-full-block/index.md) | [index.zh.md](content/posts/03-tp-through-a-full-block/index.zh.md) |
+| 04 | How to batch many requests through one forward pass | [index.md](content/posts/04-batching-many-requests/index.md) | [index.zh.md](content/posts/04-batching-many-requests/index.zh.md) |
 
----
-
-## Planned articles
-
-The series will expand outward layer by layer, axis by axis. Roughly in this order:
-
-1. **Tensor parallelism, built from scratch in your head** ✅ *(this one)*
-2. **Attention itself** — what happens after the QKV projection
-3. **Norms, residuals, and the rest of the block**
-4. **FFN and MoE**
-5. **Stacking layers** — pipeline parallelism enters
-6. **Batching** — `n` tokens at once, dynamic, continuous
-7. **Decode node and KV cache**
-8. **Putting it all together**
-
-Order may shift; topics may merge or split.
+The full list — shipped, in progress, and the holes still left to dig — lives in the [roadmap](content/posts/00-roadmap/index.md).
 
 ---
 
@@ -74,8 +62,8 @@ Just edit the markdown in `content/posts/<slug>/` and `git push`. The GitHub Act
 
 ## Style
 
-- **No matrix-math notation.** Just shapes (`[n × d]`) and stories.
-- **ASCII diagrams over LaTeX.** Anything that needs a picture should be drawable in a code block.
+- **No matrix-math notation.** Just shapes (`[N × d]`) and stories.
+- **Pictures over LaTeX.** ASCII diagrams for high-level layout sketches; inline SVG for shape traces, attention masks, and anything that needs to be richer.
 - **Discovery journey, not lecture.** The reader should feel they *derived* the answer with us, not had it handed down.
 - **Pick one mental model and stick with it.** When metaphors compete, kill the weaker one.
 - **Chinese versions = native voice, not translations.** Tech terms stay English; the prose is rewritten for Chinese readers, not transliterated.
