@@ -11,15 +11,13 @@ TocOpen: false
 weight: 2
 ---
 
-An LLM, at its plainest, is a function that reads some text and produces more text. You give it a prompt; it gives you a continuation. That's the whole user-facing contract.
+Every reply you've ever seen from an LLM was generated one token at a time, by running the same fixed-size model over and over on its own output. Not the cleverest paragraph — *every* paragraph. The model is a **transformer**, and the loop that runs it is mostly mechanical bookkeeping. Understanding the model, and that loop, is the whole game. Everything the rest of this series does — splitting the model across GPUs, sharing one forward pass across many users, making long prompts fit, making generation faster — sits downstream of these two pieces.
 
-But "produces more text" is hiding a lot. The model doesn't compose a whole reply in one shot — it produces *one token at a time*, looping on its own output. And the thing that produces each next token is a fixed-size mathematical machine called a **transformer**.
+This article opens the model up at three zoom levels:
 
-This article opens that machine up at three zoom levels:
-
-1. The whole machine, end to end — what comes in, what comes out, what's in between.
+1. The whole model, end to end — what comes in, what comes out, what's in between.
 2. One layer up close — what's actually inside the part labelled "transformer block".
-3. The full loop — how the machine is used to produce a long reply, one token at a time.
+3. The full loop — how the model is used to produce a long reply, one token at a time.
 
 We'll keep things abstract — symbols like `d`, `L`, `h` rather than specific numbers — because the *structure* is what's portable. Different models pick different sizes, but they all sit in this same shape. Concrete numbers earn their place in later articles, where they're actually load-bearing.
 
@@ -41,13 +39,15 @@ Why a vector and not just keep the integer ID? Because the model only knows how 
 
 (The vocabulary holds some `vocab` distinct tokens — typically tens of thousands. So the embedding table itself is `[vocab × d]`.)
 
-**3. A stack of transformer blocks.** This `[N × d]` tensor now flows through `L` **transformer blocks**, stacked one on top of the next. Each block reads the whole sequence, mixes information across positions, and writes back a refined version. Crucially, every block's input and output have the *same* `[N × d]` shape — only the *contents* of the rows change. After all `L` of these passes, the rows are no longer raw, context-free meanings — they're rich, position-aware representations of what each token means *in this particular sequence*. We'll dig into why blocks stack so well in §2, and open one up in Part II.
+**3. A stack of transformer blocks.** This `[N × d]` tensor now flows through `L` **transformer blocks**, stacked one on top of the next. Each block reads the whole sequence, mixes information across positions, and writes back a refined version. Crucially, every block's input and output have the *same* `[N × d]` shape — only the *contents* of the rows change.
+
+After all `L` of these passes, the rows have been refined far past their starting point. Each one now represents what that token means *in this particular sequence* — not the generic, context-free meaning we started with. We'll dig into why blocks stack so well in §2, and open one up in Part II.
 
 **4. Final norm.** A small normalization step right at the top of the stack — a clean-up pass. Same shape going in, same shape coming out.
 
 **5. LM head.** A linear layer projects each row from `d` features back out to one number per token in the vocabulary — `vocab` numbers per row. Output shape: `[N × vocab]`. Each row is a long vector of "scores" over the entire vocabulary. These scores are called **logits**. The logit for token `t` at position `i` is the model's raw, unsquashed answer to "how plausible is `t` as the next token at position `i`?"
 
-**6. Softmax → sample.** The row we actually care about is the *last* one — the position right after the last input token, where the model's prediction for "what comes next" sits. Run that `vocab`-long row through a **softmax**, which turns the raw logits into a clean probability distribution (all positive, all summing to 1). Sample one token from that distribution. That's the model's guess for the next token.
+**6. Softmax → sample.** The row we actually care about is the *last* one — the position right after the last input token, where the model's prediction for "what comes next" sits. **Softmax** turns those raw logits into probabilities — all positive, all summing to 1. Sample one token from the resulting distribution. That's the model's guess for the next token.
 
 A picture of the whole stack:
 
@@ -111,9 +111,16 @@ So the entire model is a function: it reads `N` tokens and returns a probability
 
 ## 2. Why blocks stack: the stream-processor pattern
 
-Before opening up one of those blocks, there's one structural property worth naming, because it shapes everything that comes later in the series.
+A transformer, in one line: a **stack of `L` identical "stream processors"** that read a fixed-shape stream of tokens, refine it, and hand it on. The shape is `[N × d]`. Same shape in, same shape out, repeated `L` times.
 
-Look back at the six steps in §1. Once we're past tokenization, every step in the middle of the pipeline reads and writes tensors of the **same shape**:
+Why does that property matter? Two reasons, and the rest of the series leans on both:
+
+1. **It makes the design scale by stacking.** Want a bigger model? Stack more blocks. A small open-source model and a massive flagship one look almost identical at this zoom level — same six-step pipeline, same block structure, just a different `L` (and a slightly wider `d`). Same recipe, scaled.
+2. **It frees everything downstream from caring about depth.** A block doesn't know whether it's the 1st in the stack or the 32nd, so any tool that touches blocks (the GPU splitter, the batcher, the scheduler) doesn't have to either. The stack is a uniform substrate to operate on.
+
+(You may have seen this idea elsewhere — Unix pipes, audio plugins, image-processing pipelines. Same shape in, same shape out, stack as many as you want.)
+
+To pin the shape down concretely: look back at §1's six steps. Once we're past tokenization, every step in the middle reads and writes the same `[N × d]` tensor.
 
 - The embedding turns `N` token IDs into an `[N × d]` tensor.
 - Each transformer block reads `[N × d]` and returns `[N × d]`.
@@ -122,13 +129,7 @@ Look back at the six steps in §1. Once we're past tokenization, every step in t
 
 The shape **never changes** in the middle of the pipeline. The contents do — each block refines the rows, building up a richer, more context-aware representation — but the geometry is fixed at `[N × d]` from the bottom of the stack to the top.
 
-This isn't an accident. It's what makes the design work.
-
-When the input and output of a unit have the same shape, you can drop the unit into the pipeline anywhere, in any quantity. You can stack 8 of them, or 32, or 80 — the tensor flowing between any two consecutive blocks is always the right shape for the next block to consume. Each block is a kind of **stream processor**: it reads a fixed-shape stream of tokens, refines it, and hands it on, oblivious to whether it's the first block in the stack or the last. (You may have seen this idea elsewhere — Unix pipes, audio plugins, image-processing pipelines. Same shape in, same shape out, stack as many as you want.)
-
-That property — same shape in, same shape out — is why "make the model bigger" mostly means "stack more blocks." A small open-source model and a massive flagship model often look almost identical at this level of zoom: the same six-step pipeline, the same internal block structure, just a different `L` (and a slightly wider `d`). Same recipe, scaled.
-
-Some names worth holding on to, since later sections and articles will use them:
+A few symbols later sections and articles will reach for:
 
 - `N` — the length of the current sequence. Varies per request — it's a property of the input, not the model.
 - `d` — the **hidden dimension**. The width of every row in the stream.
@@ -136,8 +137,6 @@ Some names worth holding on to, since later sections and articles will use them:
 - `vocab` — how many distinct tokens the model knows about. Sets the width of the embedding table and the LM head.
 
 We'll meet two more in Part II: `h` (the number of attention heads inside a block) and `d_head` (each head's width).
-
-So at this zoom level, the model is just a stack of `L` identical-shape stream processors operating on `[N × d]` tensors, capped by an embedding lookup at the bottom and an LM head at the top. The rest of the series will spend a lot of time on how to make those stream processors fast — but the stream-processor structure itself doesn't change.
 
 ---
 
@@ -149,35 +148,92 @@ Now let's open up one of those `L` transformer blocks. The good news: they all h
 
 A block has two halves, each wrapped in a residual connection (the little `+` at the bottom of each half — we'll explain that in a sec):
 
-```
-input  [N × d]
-   │
-   ├──────────────────────────┐
-   │                          │
- LayerNorm 1                  │   residual
-   │                          │
- QKV projection               │       d → 3d, then split into Q, K, V
-   │                          │
- multi-head attention         │       mixes across positions
-   │                          │
- output projection            │       d → d
-   │                          │
-   + ────────────────────────┘
-   │
-   ├──────────────────────────┐
-   │                          │
- LayerNorm 2                  │   residual
-   │                          │
- FFN-up                       │       d → 4d
-   │                          │
- activation (GeLU)            │       pointwise nonlinearity
-   │                          │
- FFN-down                     │       4d → d
-   │                          │
-   + ────────────────────────┘
-   │
-output [N × d]
-```
+<svg viewBox="0 0 720 720" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto;font-family:system-ui,sans-serif;display:block;margin:1.5rem auto">
+  <defs>
+    <marker id="arr-block-overview" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M 0 0 L 8 4.5 L 0 9 Z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <text x="360" y="24" text-anchor="middle" font-size="14" fill="currentColor" font-weight="600">one block — two halves, each wrapped in a residual</text>
+
+  <rect x="270" y="44" width="180" height="36" fill="rgba(74,144,226,0.20)" stroke="#4a90e2" stroke-width="1.5"/>
+  <text x="360" y="67" text-anchor="middle" font-size="12" fill="currentColor" font-weight="600">input</text>
+  <text x="465" y="66" font-size="11" fill="currentColor" opacity="0.7" font-family="ui-monospace,monospace">[N × d]</text>
+
+  <line x1="360" y1="80" x2="360" y2="98" stroke="currentColor" stroke-width="1.5"/>
+  <circle cx="360" cy="100" r="3.5" fill="currentColor"/>
+  <line x1="360" y1="103" x2="360" y2="118" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-block-overview)"/>
+  <path d="M 360 100 L 190 100 L 190 342 L 349 342" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#arr-block-overview)"/>
+  <text x="135" y="220" font-size="11" fill="currentColor" opacity="0.65" font-style="italic">residual</text>
+
+  <path d="M 615 122 L 635 122 L 635 322 L 615 322" fill="none" stroke="currentColor" stroke-width="1" opacity="0.45"/>
+  <text x="645" y="220" font-size="11" fill="currentColor" font-weight="600" opacity="0.7">attention</text>
+  <text x="645" y="234" font-size="11" fill="currentColor" font-weight="600" opacity="0.7">sub-layer</text>
+
+  <rect x="270" y="122" width="180" height="32" fill="rgba(245,166,35,0.18)" stroke="#f5a623" stroke-width="1.5"/>
+  <text x="360" y="143" text-anchor="middle" font-size="12" fill="currentColor">LayerNorm 1</text>
+  <text x="465" y="142" font-size="11" fill="currentColor" opacity="0.65" font-style="italic">tidy-up</text>
+  <line x1="360" y1="154" x2="360" y2="172" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-block-overview)"/>
+
+  <rect x="270" y="176" width="180" height="32" fill="rgba(245,166,35,0.18)" stroke="#f5a623" stroke-width="1.5"/>
+  <text x="360" y="197" text-anchor="middle" font-size="12" fill="currentColor">QKV projection</text>
+  <text x="465" y="196" font-size="11" fill="currentColor" opacity="0.65" font-style="italic">d → 3d, split into Q, K, V</text>
+  <line x1="360" y1="208" x2="360" y2="226" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-block-overview)"/>
+
+  <rect x="270" y="230" width="180" height="32" fill="rgba(245,166,35,0.18)" stroke="#f5a623" stroke-width="1.5"/>
+  <text x="360" y="251" text-anchor="middle" font-size="12" fill="currentColor">multi-head attention</text>
+  <text x="465" y="250" font-size="11" fill="currentColor" opacity="0.65" font-style="italic">mixes across positions</text>
+  <line x1="360" y1="262" x2="360" y2="280" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-block-overview)"/>
+
+  <rect x="270" y="284" width="180" height="32" fill="rgba(245,166,35,0.18)" stroke="#f5a623" stroke-width="1.5"/>
+  <text x="360" y="305" text-anchor="middle" font-size="12" fill="currentColor">output projection</text>
+  <text x="465" y="304" font-size="11" fill="currentColor" opacity="0.65" font-style="italic">d → d</text>
+  <line x1="360" y1="316" x2="360" y2="332" stroke="currentColor" stroke-width="1.5"/>
+
+  <circle cx="360" cy="342" r="11" fill="rgba(150,150,150,0.18)" stroke="currentColor" stroke-width="1.5"/>
+  <text x="360" y="347" text-anchor="middle" font-size="14" fill="currentColor" font-weight="600">+</text>
+
+  <line x1="360" y1="353" x2="360" y2="372" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-block-overview)"/>
+  <text x="465" y="368" font-size="11" fill="currentColor" opacity="0.65" font-family="ui-monospace,monospace">[N × d]</text>
+
+  <circle cx="360" cy="378" r="3.5" fill="currentColor"/>
+  <line x1="360" y1="381" x2="360" y2="396" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-block-overview)"/>
+  <path d="M 360 378 L 190 378 L 190 620 L 349 620" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#arr-block-overview)"/>
+  <text x="135" y="498" font-size="11" fill="currentColor" opacity="0.65" font-style="italic">residual</text>
+
+  <path d="M 615 400 L 635 400 L 635 600 L 615 600" fill="none" stroke="currentColor" stroke-width="1" opacity="0.45"/>
+  <text x="645" y="498" font-size="11" fill="currentColor" font-weight="600" opacity="0.7">FFN</text>
+  <text x="645" y="512" font-size="11" fill="currentColor" font-weight="600" opacity="0.7">sub-layer</text>
+
+  <rect x="270" y="400" width="180" height="32" fill="rgba(245,166,35,0.18)" stroke="#f5a623" stroke-width="1.5"/>
+  <text x="360" y="421" text-anchor="middle" font-size="12" fill="currentColor">LayerNorm 2</text>
+  <text x="465" y="420" font-size="11" fill="currentColor" opacity="0.65" font-style="italic">tidy-up</text>
+  <line x1="360" y1="432" x2="360" y2="450" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-block-overview)"/>
+
+  <rect x="270" y="454" width="180" height="32" fill="rgba(245,166,35,0.18)" stroke="#f5a623" stroke-width="1.5"/>
+  <text x="360" y="475" text-anchor="middle" font-size="12" fill="currentColor">FFN-up</text>
+  <text x="465" y="474" font-size="11" fill="currentColor" opacity="0.65" font-style="italic">d → 4d</text>
+  <line x1="360" y1="486" x2="360" y2="504" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-block-overview)"/>
+
+  <rect x="270" y="508" width="180" height="32" fill="rgba(245,166,35,0.18)" stroke="#f5a623" stroke-width="1.5"/>
+  <text x="360" y="529" text-anchor="middle" font-size="12" fill="currentColor">activation (GeLU)</text>
+  <text x="465" y="528" font-size="11" fill="currentColor" opacity="0.65" font-style="italic">pointwise nonlinearity</text>
+  <line x1="360" y1="540" x2="360" y2="558" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-block-overview)"/>
+
+  <rect x="270" y="562" width="180" height="32" fill="rgba(245,166,35,0.18)" stroke="#f5a623" stroke-width="1.5"/>
+  <text x="360" y="583" text-anchor="middle" font-size="12" fill="currentColor">FFN-down</text>
+  <text x="465" y="582" font-size="11" fill="currentColor" opacity="0.65" font-style="italic">4d → d</text>
+  <line x1="360" y1="594" x2="360" y2="610" stroke="currentColor" stroke-width="1.5"/>
+
+  <circle cx="360" cy="620" r="11" fill="rgba(150,150,150,0.18)" stroke="currentColor" stroke-width="1.5"/>
+  <text x="360" y="625" text-anchor="middle" font-size="14" fill="currentColor" font-weight="600">+</text>
+
+  <line x1="360" y1="631" x2="360" y2="648" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-block-overview)"/>
+
+  <rect x="270" y="652" width="180" height="36" fill="rgba(74,144,226,0.20)" stroke="#4a90e2" stroke-width="1.5"/>
+  <text x="360" y="675" text-anchor="middle" font-size="12" fill="currentColor" font-weight="600">output</text>
+  <text x="465" y="674" font-size="11" fill="currentColor" opacity="0.7" font-family="ui-monospace,monospace">[N × d]</text>
+</svg>
 
 The two halves are the two main events: an **attention** sub-layer and an **FFN** (feed-forward network) sub-layer. The other parts (LayerNorm, the activation, the `+`) are smaller pieces of glue.
 
@@ -233,18 +289,49 @@ Here's a small thing about attention that turns out to matter a lot: it's not ru
 
 After the QKV projection produces Q, K, V each of shape `[N × d]`, we *reshape* each one along the feature dimension into `h` groups of width `d_head = d / h`. Each group is one **head**. Each head runs the §4 attention computation on its own slice — its own queries, its own keys, its own values. Their outputs are concatenated back into `[N × d]` and fed into the output projection.
 
-```
-                                    reshape                  per head                      concat
-    [N × d]   ───────────────────▶  [N × h × d_head]   ─────────────▶   [N × h × d_head]   ─────▶   [N × d]
-       Q, K, V                       h heads of d_head                  h attention                  to output
-                                                                         outputs                     projection
-```
+<svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto;font-family:system-ui,sans-serif;display:block;margin:1.5rem auto">
+  <defs>
+    <marker id="arr-heads" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M 0 0 L 8 4.5 L 0 9 Z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <text x="380" y="22" text-anchor="middle" font-size="14" fill="currentColor" font-weight="600">multi-head attention: reshape, per-head, concat</text>
+
+  <rect x="10" y="78" width="130" height="48" fill="rgba(74,144,226,0.20)" stroke="#4a90e2" stroke-width="1.5"/>
+  <text x="75" y="98" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">Q, K, V</text>
+  <text x="75" y="116" text-anchor="middle" font-size="12" fill="currentColor" font-weight="600" font-family="ui-monospace,monospace">[N × d]</text>
+
+  <line x1="140" y1="102" x2="178" y2="102" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-heads)"/>
+  <text x="160" y="90" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.7" font-style="italic">reshape</text>
+
+  <rect x="180" y="78" width="160" height="48" fill="rgba(120,180,140,0.20)" stroke="#78b48c" stroke-width="1.5"/>
+  <text x="260" y="98" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">h heads, each d_head wide</text>
+  <text x="260" y="116" text-anchor="middle" font-size="12" fill="currentColor" font-weight="600" font-family="ui-monospace,monospace">[N × h × d_head]</text>
+
+  <line x1="340" y1="102" x2="398" y2="102" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-heads)"/>
+  <text x="370" y="90" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.7" font-style="italic">attention (§4)</text>
+
+  <rect x="400" y="78" width="160" height="48" fill="rgba(120,180,140,0.20)" stroke="#78b48c" stroke-width="1.5"/>
+  <text x="480" y="98" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">h attention outputs</text>
+  <text x="480" y="116" text-anchor="middle" font-size="12" fill="currentColor" font-weight="600" font-family="ui-monospace,monospace">[N × h × d_head]</text>
+
+  <line x1="560" y1="102" x2="598" y2="102" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr-heads)"/>
+  <text x="580" y="90" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.7" font-style="italic">concat</text>
+
+  <rect x="600" y="78" width="150" height="48" fill="rgba(74,144,226,0.20)" stroke="#4a90e2" stroke-width="1.5"/>
+  <text x="675" y="98" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">to output proj</text>
+  <text x="675" y="116" text-anchor="middle" font-size="12" fill="currentColor" font-weight="600" font-family="ui-monospace,monospace">[N × d]</text>
+
+  <text x="380" y="160" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.7" font-style="italic">each head runs §4's attention algorithm on its own slice — independently of the others</text>
+</svg>
 
 Real models pick `h` and `d_head` to multiply back to `d` — typically a few dozen heads, each one a hundred-something wide.
 
 The model-design intuition: different heads can learn to pay attention to different *kinds* of things. Some end up tracking short-range syntactic relationships ("which word does this pronoun refer to?"). Others track longer-range patterns. Multiple heads = multiple "perspectives" on what to attend to.
 
-The systems intuition we'll need later is more brutal: **heads are independent.** Head 0 doesn't talk to head 1 during attention. Each one runs its own little attention computation on its own slice of the features and produces its own output. That independence is just a property of how the model is built — but it'll turn out to be a lifesaver every time we want to split work across hardware.
+The systems intuition we'll need later is more brutal: **heads are independent.** Head 0 doesn't talk to head 1 during attention. Each one runs its own little attention computation on its own slice of the features and produces its own output.
+
+That independence is just a property of how the model is built — but it's *load-bearing* for everything that comes next. Article 02 will use exactly this property to literally cut the model across two GPUs: half the heads go to one card, half go to the other, and during attention they don't need to talk to each other at all. The picture for "how do we run a model that's too big for one GPU" turns out to start right here.
 
 ---
 
@@ -254,7 +341,11 @@ Inside attention, there's one more rule we haven't mentioned, and it's essential
 
 Why this rule exists comes from training. The model is trained one *next token* at a time: feed in a sequence, ask the model to predict each next token from everything that came before it. If position `i` were allowed to peek at position `i+1` during attention, it would be allowed to *cheat* by reading the answer. The mask is what enforces "no peeking ahead."
 
-The mask has a second job, too — and it's the one we'll lean on the most. It's what makes the generation loop in Part III well-defined. The token at position `N+1` only depends on tokens 1..N, never the other way around. So we can compute new tokens in order, one at a time, without ever having to revise an earlier one. That property is what makes "generate a long answer one token at a time" work at all.
+The mask has two more consequences worth naming, and they come up later.
+
+First, it's what makes the generation loop in Part III well-defined: the token at position `N+1` only depends on tokens 1..N, never the other way around. So we can compute new tokens in order, one at a time, without ever revising an earlier one. That property is what makes "generate a long answer one token at a time" work at all.
+
+Second — and this is the bigger one — the mask means an old token's work *never has to be redone*. Position 5's hidden state is the same whether the sequence is 5 tokens long or 500 long; no future token can reach back and change it. That stable-once-computed property is what makes it even *thinkable* to save earlier work and reuse it later instead of recomputing it on every forward. Without the mask, every new token would force a full revisit of everything that came before. With it, we can imagine processing tokens in order and just *remembering* what we already computed — the question §10 will land on, and one of the most load-bearing optimizations in the rest of the series.
 
 ---
 
@@ -400,7 +491,7 @@ Three things worth pausing on:
 
 The model in §1 takes a sequence of length `N` and returns a probability distribution over what the next token should be. **One** token. Not a whole sentence, not even a phrase — a single next-token guess.
 
-But we're used to LLMs producing long replies. How does a one-token-at-a-time machine produce a paragraph? Exactly how you'd guess: by running over and over and feeding its own output back in.
+But we're used to LLMs producing long replies. How does a one-token-at-a-time model produce a paragraph? Exactly how you'd guess: by running over and over and feeding its own output back in.
 
 Concretely:
 
@@ -501,15 +592,17 @@ That kind of question is exactly what this series picks at later on.
 
 ## 10. The map of questions
 
-With §1's stack, §2's stream-processor pattern, §4's attention mechanism, §7's full-block picture, and §8's loop in hand, a lot of practical questions about *running* an LLM follow naturally — and most of them don't have obvious answers. Each of these is the seed of an article down the line.
+Two themes run through the rest of the series, and most practical questions about *running* an LLM fall into one or the other.
 
-- **The model itself can be huge.** Once you stack enough blocks (large `L`) at a wide enough `d`, the weights alone are too big to fit on a single GPU. How do we split one forward pass across multiple GPUs? *(Articles 02 and 03.)*
-- **Many users at once.** A real serving system has many concurrent prompts of different lengths. How do they share one forward pass without padding waste? *(Article 04.)*
-- **Generation is repetitive.** As §9 hinted, the naive loop redoes most of its work. What state could we keep around to avoid that, and what does keeping it cost us?
-- **Different users finish at different times.** When some users are still generating their thousandth output token and others are just starting their first, how does the engine keep everyone moving without leaving the GPU idle?
-- **Some prompts are huge.** What if the prompt itself is so long that a single forward pass on it takes forever, or runs out of memory? Can we process it in pieces?
-- **The "remembered state" has to live somewhere.** Whatever we keep around to avoid §9's recomputation needs to be allocated, stored, freed, and shared across many concurrent requests. How do we manage that, and what does "out of memory" mean in this setting?
-- **Attention's `[h × N × N]` matrix gets expensive.** Look back at §7: that score matrix scales with the **square of the sequence length**. For long sequences it becomes the bottleneck — and naively it has to be materialized in memory. Can we be smarter?
-- **Generating one new token feels nothing like processing a long prompt.** §9's per-call cost is *very* different depending on whether you're processing a long input or appending one extra output token. Maybe the engine should treat those two cases differently — or even split them across different machines.
+**Theme 1 — Making one forward pass *fit*.** A single forward through this stack can be too big in several ways at once: too big to fit on one GPU, too long to compute in reasonable time, too memory-hungry inside attention. The articles in this theme are about *splitting work spatially* so a forward can land on the hardware you have.
 
-The model in §1–§7 is what all of these questions are *about*. The loop in §8 is what they're trying to make fast and efficient. The rest of the series picks them off one at a time.
+- **The model itself can be huge.** Stack enough blocks (large `L`) at a wide enough `d` and the weights alone won't fit on a single GPU. How do we split one forward across multiple GPUs? *(Articles 02 and 03 — leveraging exactly the head-independence we set up in §5.)*
+- **The prompt itself can be huge.** §7's `[h × N × N]` score matrix scales with the **square** of the sequence length. For a long prompt that either runs out of memory or pins the GPU for too long. Can we process the prompt in pieces, or compute attention more cleverly?
+
+**Theme 2 — Making the *loop* fast.** Each forward gives one token, and §9 already spotted the biggest cost: the naive loop redoes most of its work. The articles in this theme are about *not redoing things, sharing forwards across users, and scheduling who runs when*.
+
+- **Don't redo work.** §6 set up the property: an old token's representation, once computed, never changes. So we should be able to save it and reuse it on the next forward instead of recomputing. That state has to live *somewhere* — where, how big does it get, and how does it grow as the conversation grows?
+- **Many users at once.** Real serving engines run many concurrent prompts of different lengths, finishing at different times. How do they share one forward without padding waste, and how does the scheduler keep everyone moving when some are on token 1 and others are on token 1000? *(Article 04 begins this thread.)*
+- **Prompt-processing and one-more-token feel nothing alike.** §9's per-call cost shape is *very* different depending on whether you're processing a long input from scratch or appending one extra output token. Their bottlenecks live in different parts of the GPU. Maybe the engine should treat them as different workloads — or even split them across different machines.
+
+The model in §1–§7 is what both themes are *about*; the loop in §8 is what they're trying to make work at scale. The rest of the series picks them off, one question at a time.
