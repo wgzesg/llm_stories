@@ -123,7 +123,7 @@ H100 有效算力：fp16 compute-bound 任务 ~500 TFLOPs/s，read-bound 任务 
 
 正是最后这个数字把引擎搞崩。要感受一下它的含义：想象你正在用 ChatGPT，下一段正以每秒 ~150 token 顺顺地流着，突然 —— 在你能看见的范围里没有任何理由 —— 模型在一个写到一半的单词上**冻住了八秒钟**才接着写。你的对话本身一点没变。在你看不到的某个地方发生的事是：另一个用户往他自己的会话里粘了一份 10 万 token 的文档，你这一步 decode iteration 刚好被拼进了和他那个 prefill 同一次 forward。对 ORCA 来说这次 iteration 拼起来很正当 —— 两边都是合法的工作 —— 但 wall time 由他那个 prefill 决定，账由你来付。
 
-这种 head-of-line blocking 有两种味道，两种都发生在*一次 iteration 之内*，不是跨 batch。
+这种 head-of-line blocking 有两种表现形式，两种都发生在*一次 iteration 之内*，不是跨 batch。
 
 ### 3.1 正在跑的 decoder 的 TBT 尖峰
 
@@ -243,7 +243,7 @@ varlen kernel 把每个 request 的切片各自走一遍。TP 还是完全没动
 `C` 是 scheduler 这边新增的旋钮：
 
 - **`C` 小** → iteration 时间更均匀、正在跑的 decoder 的 TBT 更低；但每个 chunk 的 cache 重读更多，linears 的 MFU 更低（小 GEMM 离峰值更远）。
-- **`C` 大** → cache 重读更少、MFU 更高；但 iteration 的 wall time 又开始往上爬，整车人的 TBT 又开始劣化。
+- **`C` 大** → cache 重读更少、MFU 更高；但 iteration 的 wall time 又开始往上爬，所有人的 TBT 又开始劣化。
 
 真实系统挑 `C` 一般落在 **256–8192** 这个范围，通常跟"每次 iteration 最多多少 token-row"的预算挂钩，预算的目标是控住 TBT 上限。举个具体的：在"每次 iteration ≤ 50 ms、最多 2048 个 Q 行"这套预算下，一段 100 k-token 的 prompt 会被 prefill 成 `100 000 / 2048 ≈ 49` 次 iteration，每一次都跟当时手上的 decode 一起跑。
 
@@ -257,7 +257,7 @@ varlen kernel 把每个 request 的切片各自走一遍。TP 还是完全没动
 
 **KV 这边的 HBM 带宽消耗涨了。** chunk `k` 在每一层每一次 attention 都要*再读* `kC` 行 cache。所有 chunk 加起来：≈ `N²/(2C)` 行 cache 累计流量，而不切的 prefill 只用 ~`N` 行（tiled attention 把 cache 流过去恰好一遍）。`N = 100 k`、`C = 2048` 时，同一段 prompt 的累计 cache 读带宽大约多了 **25 倍** —— 这是 chunking 为了"把 iteration 封顶"付的价。这也是为什么 `C` 不能无限做小：到某个点之后，带宽税会盖过可调度性带来的收益。
 
-**`C` 小的时候每次 iteration 的 MFU 会掉。** `C` 小的 iteration，linears 的 matmul 跑得离峰值远 —— tensor core 能咬的行数太少。真实 serving 引擎调 `C` 时找的是一个甜点：让 iteration 时间能压到 TBT 目标、又不至于把 MFU 浪费太多。
+**`C` 小的时候每次 iteration 的 MFU 会掉。** `C` 小的 iteration，linears 的 matmul 跑得离峰值远 —— tensor core 能咬的行数太少。真实 serving 引擎调 `C` 时找的是一个平衡点：让 iteration 时间能压到 TBT 目标、又不至于把 MFU 浪费太多。
 
 这三条加起来解释了 `C` 一般落在 **256–8192** 这个区间的原因。没有标准答案；区间具体落在哪儿，取决于模型本身的算力/带宽特性、以及引擎对 TBT 和吞吐的目标。
 
