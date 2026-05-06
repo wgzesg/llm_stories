@@ -17,9 +17,9 @@ weight: 6
 
 （先把一个名字钉在脑子里，后面会反复用到：**一次 iteration 就是从模型的第 0 层一路 forward 到第 `L−1` 层、走一整遍。**喂进去的内容可以是某个 prompt 的一块、可以是好几个 request 的 decode 步、或者两者混着 —— 不管是什么，一次 iteration 把它们送过 `L` 层一遍。）
 
-想象一下引擎里的几秒钟。几十个 request 在飞：有些还在嚼 prompt、有些已经 decode 到第 50 个 token、有些再吐 1000 步就要结束、还有些刚刚进来。新 request 进来，旧 request 走人。scheduler 的工作就是在伺候好每一个 request 的同时，把 GPU 塞得尽可能满。
+想象一下引擎里的几秒钟。几十个 request 正在同时跑：有些还在嚼 prompt、有些已经 decode 到第 50 个 token、有些再吐 1000 步就要结束、还有些刚刚进来。新 request 进来，旧 request 走人。scheduler 的工作就是在伺候好每一个 request 的同时，把 GPU 塞得尽可能满。
 
-两个问题落了下来：
+由此引出两个问题：
 
 1. **request 的到达时间和结束时间各不相同。** 引擎要怎么在不让谁在生命的起点或终点卡住的前提下，把 GPU 塞满？
 2. **每次 iteration 的开销能差出 1000 倍。** 一次纯 decode 的 forward 跑几毫秒就完事；如果其中混了一个 100 k-token 的 prefill，就要好几秒。怎么让每次 iteration 的开销大致平稳，scheduler 才好规划？
@@ -40,13 +40,13 @@ weight: 6
 
 两个失败都来自同一个根因：**一个静态 batch 只有一个共享寿命，由它所有成员里最长的那个决定。** 比这个最大值短的人在浪费；在开跑之后到达的人在干等。
 
-scheduler 被绑在了错误的粒度上。现实是按 *iteration* 这个粒度在动 —— 每次 forward，每个在飞的 request 都产出一个 token（或者一块 prefill）。但 scheduler 在按 *batch* 这个粒度做决策 —— 几千次 iteration 才决策一次。当然跟不上。
+scheduler 被绑在了错误的粒度上。现实是按 *iteration* 这个粒度在动 —— 每次 forward，每个正在跑的 request 都产出一个 token（或者一块 prefill）。但 scheduler 在按 *batch* 这个粒度做决策 —— 几千次 iteration 才决策一次。当然跟不上。
 
 ---
 
 ## 2. ORCA：按 iteration 调度，不按 batch
 
-[ORCA 那篇论文](https://www.usenix.org/system/files/osdi22-yu.pdf) 给的修法说起来很简单，后果却很大：把 **iteration** —— 端到端走完 `L` 层的一次 forward —— 当成调度单位。在飞的 request 集合不再是收进来时定死的名单，而是 scheduler 在每次 forward 之间都在动手整理的一个活东西。
+[ORCA 那篇论文](https://www.usenix.org/system/files/osdi22-yu.pdf) 给的修法说起来很简单，后果却很大：把 **iteration** —— 端到端走完 `L` 层的一次 forward —— 当成调度单位。正在跑的 request 集合不再是收进来时定死的名单，而是 scheduler 在每次 forward 之间都在动手整理的一个活东西。
 
 两次 iteration 之间，scheduler 可以：
 
@@ -89,7 +89,7 @@ kernel 这边就这一个改动。ORCA 真正的贡献不是一个新的 attenti
 
 ## 3. 下一个问题：iteration 自身的开销也摇摆得厉害
 
-ORCA 把"到达"和"结束"这两端的边界问题修了，靠的是把 iteration 升格成调度单位。但把 iteration 当成调度单位，同时也意味着它变成了**整台引擎的心跳**。所有在飞的 request —— 不管是 decoder 还是 prefiller —— 每次 iteration 都各自往前走一小步。所以如果 iteration `t` 用了 6 ms、iteration `t+1` 用了 8 秒，那么*任何*在飞 decoder 的两个相邻 token 之间，都隔了 8 秒。一次 iteration 的 wall time 不再只是 GPU 内部花了多少算力的私事；它是这一轮里引擎里所有人共同的延迟下限。
+ORCA 把"到达"和"结束"这两端的边界问题修了，靠的是把 iteration 升格成调度单位。但把 iteration 当成调度单位，同时也意味着它变成了**整台引擎的心跳**。所有正在跑的 request —— 不管是 decoder 还是 prefiller —— 每次 iteration 都各自往前走一小步。所以如果 iteration `t` 用了 6 ms、iteration `t+1` 用了 8 秒，那么*任何*正在跑的 decoder 的两个相邻 token 之间，都隔了 8 秒。一次 iteration 的 wall time 不再只是 GPU 内部花了多少算力的私事；它是这一轮里引擎里所有人共同的延迟下限。
 
 那 iteration 的 wall time 到底能波动多大？我们以 **Llama-2-7B** 在单张 H100 上跑为锚，把几种现实里 scheduler 真会拼出来的 iteration mix 套进成本模型走一遍。
 
@@ -105,7 +105,7 @@ H100 有效算力：fp16 compute-bound 任务 ~500 TFLOPs/s，read-bound 任务 
 
 </details>
 
-底子是 8 个在飞 decoder，每个 context ~1 k。在同一次 iteration 里再塞进一个新 request，看几种情况：
+底子是 8 个正在跑的 decoder，每个 context ~1 k。在同一次 iteration 里再塞进一个新 request，看几种情况：
 
 | Iteration mix（8 decode + …）| Linear | Attn | Total | Wall time |
 |---|---:|---:|---:|---:|
@@ -125,15 +125,15 @@ H100 有效算力：fp16 compute-bound 任务 ~500 TFLOPs/s，read-bound 任务 
 
 这种 head-of-line blocking 有两种味道，两种都发生在*一次 iteration 之内*，不是跨 batch。
 
-### 3.1 在飞 decoder 的 TBT 尖峰
+### 3.1 正在跑的 decoder 的 TBT 尖峰
 
-上面那个场景有个名字：**TBT**（*time-between-tokens*） —— 一个 decode request 相邻两个 output token 之间的等待时间，决定了用户感受到的"匀速流式"那种体验。一个被 100k prefill 拖累的 iteration，会让所有恰好跟它共一轮的在飞 decoder 的 TBT 暴增 **~1300 倍**。
+上面那个场景有个名字：**TBT**（*time-between-tokens*） —— 一个 decode request 相邻两个 output token 之间的等待时间，决定了用户感受到的"匀速流式"那种体验。一个被 100k prefill 拖累的 iteration，会让所有恰好跟它共一轮的正在跑的 decoder 的 TBT 暴增 **~1300 倍**。
 
-静态 batch 不会出这种问题 —— 但静态 batch 有它自己的灾难。ORCA 没把任何东西搞坏；它只是让一种本来就存在的差异*在 iteration 这个层级上变得可见*，结果是：现在它一来就同时砸在引擎里每个人头上。
+静态 batch 不会出这种问题 —— 但静态 batch 有它自己的灾难。ORCA 并没有破坏什么；它只是让一种本来就存在的差异*在 iteration 这个层级上浮出水面*，结果就是：它一出现，就同时砸在引擎里每个人头上。
 
 ### 3.2 短 prefill 跟长 prefill 一起跑出来的 TTFT 尖峰
 
-两个新 request 同一轮 iteration 一起到了：一个 prompt 100 token，一个 prompt 10 k token。ORCA 高高兴兴把它俩一起塞进同一次 forward —— 都是要做 prefill、都没在飞的状态要照顾，往一次 iteration 里多塞东西本来就是 kernel 设计来做的事。但这次 forward 的 wall time 由长的那个邻居定：
+两个新 request 同一轮 iteration 一起到了：一个 prompt 100 token，一个 prompt 10 k token。ORCA 高高兴兴把它俩一起塞进同一次 forward —— 都是要做 prefill、都没有跑到一半的状态要照顾，往一次 iteration 里多塞东西本来就是 kernel 设计来做的事。但这次 forward 的 wall time 由长的那个邻居定：
 
 | Forward 内容 | Linear | Attn | Wall time |
 |---|---:|---:|---:|
@@ -153,9 +153,9 @@ H100 有效算力：fp16 compute-bound 任务 ~500 TFLOPs/s，read-bound 任务 
 
 ## 4. Chunked prefill：给最大那块封顶
 
-如果长 prefill 是问题，那有什么东西阻止我们直接*把它切开*？
+如果长 prefill 是问题，那为什么不干脆*把它切开*？
 
-结构上其实没什么阻拦 —— KV cache 让"切开"这件事变得 trivial。chunk 0 跑完之后，它每一层的 K、V 已经存在 cache 里了。chunk 1 的 attention 直接读就行，跟 decode step 读 cache 是同一个动作。整段 prefill 一次性跑出来的数学和这个一模一样，结构上就是相等的；唯一的差别是这些活*在什么时候*被做。
+结构上其实没什么不让切的理由 —— KV cache 让"切开"这件事变得 trivial。chunk 0 跑完之后，它每一层的 K、V 已经存在 cache 里了。chunk 1 的 attention 直接读就行，跟 decode step 读 cache 是同一个动作。整段 prefill 一次性跑出来的数学和这个一模一样，结构上就是相等的；唯一的差别是这些活*在什么时候*被做。
 
 所以：把一段长 prompt 切成大小为 `C` 的 chunk，每次 iteration 带一块走。走一遍：一个长度为 `N` 的 prompt 在做 prefill 时会发生什么 ——
 
@@ -206,7 +206,7 @@ chunk `k` 上的 mask 有两块：
 | Output proj | matmul | 不碰 |
 | Residual + LayerNorm + FFN-up + GeLU + FFN-down + Residual | 按行做 | 不碰 |
 
-相比 Article 04 唯一变化的是 **attention**，几个形状被广义化了：
+相比 Article 04 唯一变化的是 **attention**，几个形状被泛化了：
 
 - Q 行数是 `C`，不再是"这个 request 的整个长度"。
 - K、V 行数是 `S + C`，不再等于 Q —— 前缀现在住在 cache 里。
@@ -216,13 +216,13 @@ Linears、residuals、layernorms、按元素的操作都是按行做的，根本
 
 这个 score block 的形状值得停下来想一想：它是一个混合体。左边那块 —— 这个 chunk 的 query 对前缀 cache —— 长得和*把 `C` 个 decode step 摞在一起*那种 score block 一模一样：对前面所有 token 全开 attention。右边那块 —— chunk 对自己 —— 是一个普通的 causal prefill 的 `[C × C]` block。**decode 和 prefill 是同一个形状的两个极端，chunked prefill 是这个谱系上的任何一点。**
 
-回头看，结论就显然了：**decode 不过是 `C = 1` 的 chunked prefill。** 同一套机器，不同的旋钮取值而已。
+事后再看就一目了然：**decode 不过是 `C = 1` 的 chunked prefill。** 同一套机器，不同的旋钮取值而已。
 
 ---
 
 ## 5. Piggyback：prefill chunk 跟 decode 共用一次 iteration
 
-这一节是所有东西组合起来的地方。Article 04 那套 flat-tensor + varlen kernel 不在乎一个 request 的切片*是哪种*工作。对 kernel 来说，一个 request 的切片就是 `(q_rows, kv_length)` —— 不管它是在 decode（q_rows = 1）、是在 prefill 自己的第一个 chunk（q_rows = C, kv_length = C），还是在跑中间某个 chunk（q_rows = C, kv_length = S + C），形状都是这一个。
+现在前面所有的零件要拼起来了。Article 04 那套 flat-tensor + varlen kernel 不在乎一个 request 的切片*是哪种*工作。对 kernel 来说，一个 request 的切片就是 `(q_rows, kv_length)` —— 不管它是在 decode（q_rows = 1）、是在 prefill 自己的第一个 chunk（q_rows = C, kv_length = C），还是在跑中间某个 chunk（q_rows = C, kv_length = S + C），形状都是这一个。
 
 所以一次 iteration 可以承载下面这些东西，全部打包进一个 flat tensor：
 
@@ -238,20 +238,20 @@ Total Q rows in this iteration: 1024 + 3 = 1027
 
 varlen kernel 把每个 request 的切片各自走一遍。TP 还是完全没动到。
 
-这就是 **piggyback chunked prefill**：长 prefill 和在飞 decode 在一次 forward 里共存。scheduler 的工作变成了一种 bin-packing —— 每次 iteration 有一个预算（比如"Q 不超过 2048 行、iteration 不超过 50 ms"），用 decode step 和 prefill chunk 的任意组合把它填满。一段长 prompt 变成一连串 chunk 大小的贡献，每次 iteration 一块，和当时在跑的所有 decode 一起跑。短 prefill 一次就能跑完。decode 总是塞得下。§3 里那 1300 倍的波动塌缩成一个稳定的 iteration profile —— 大概 2 到 3 倍 —— 容易规划，引擎的心跳又稳了。
+这就是 **piggyback chunked prefill**：长 prefill 和正在跑的 decode 在一次 forward 里共存。scheduler 的工作变成了一种 bin-packing —— 每次 iteration 有一个预算（比如"Q 不超过 2048 行、iteration 不超过 50 ms"），用 decode step 和 prefill chunk 的任意组合把它填满。一段长 prompt 变成一连串 chunk 大小的贡献，每次 iteration 一块，和当时在跑的所有 decode 一起跑。短 prefill 一次就能跑完。decode 总是塞得下。§3 里那 1300 倍的波动塌缩成一个稳定的 iteration profile —— 大概 2 到 3 倍 —— 容易规划，引擎的心跳又稳了。
 
 `C` 是 scheduler 这边新增的旋钮：
 
-- **`C` 小** → iteration 时间更均匀、在飞 decoder 的 TBT 更低；但每个 chunk 的 cache 重读更多，linears 的 MFU 更低（小 GEMM 离峰值更远）。
+- **`C` 小** → iteration 时间更均匀、正在跑的 decoder 的 TBT 更低；但每个 chunk 的 cache 重读更多，linears 的 MFU 更低（小 GEMM 离峰值更远）。
 - **`C` 大** → cache 重读更少、MFU 更高；但 iteration 的 wall time 又开始往上爬，整车人的 TBT 又开始劣化。
 
 真实系统挑 `C` 一般落在 **256–8192** 这个范围，通常跟"每次 iteration 最多多少 token-row"的预算挂钩，预算的目标是控住 TBT 上限。举个具体的：在"每次 iteration ≤ 50 ms、最多 2048 个 Q 行"这套预算下，一段 100 k-token 的 prompt 会被 prefill 成 `100 000 / 2048 ≈ 49` 次 iteration，每一次都跟当时手上的 decode 一起跑。
 
 ---
 
-## 6. 成本直觉
+## 6. 成本分析
 
-三件值得停下来看一眼，因为每一条都有牙齿。
+下面三件事值得停下来想一想，每一条都不是小开销。
 
 **总算力没省。** chunk `k = 0 … N/C − 1` 各自的 `C · (k+1)C` 个 causal pair 加起来等于 `N²/2`。chunked prefill *把* attention 的活在 iteration 之间*重新分配*，但没有把它减少。
 
@@ -263,9 +263,9 @@ varlen kernel 把每个 request 的切片各自走一遍。TP 还是完全没动
 
 ---
 
-## 7. 这之后还有什么口子
+## 7. 之后还有哪些新问题
 
-到这里，我们手里有了一个真正的 serving 循环：prefill、decode、混合 iteration、单次 iteration 的开销有上限、没有空转的 slot。还有几条假设是漏的，每一条都为下一轮文章埋下种子。
+到这里，我们手里有了一个真正的 serving 循环：prefill、decode、混合 iteration、单次 iteration 的开销有上限、没有空转的 slot。还有几条假设是漏的，每一条都给后面的文章埋下种子。
 
 - **KV cache 的物理布局。** 我们一直默默假设每个 request 的 cache 在每一层都是一段连续的内存。一旦 `B` 涨起来、上下文长度又千差万别，这件事很快就难看 —— 碎片、eviction、分配开销。**PagedAttention** 把 cache 当虚拟内存来处理；下一篇文章。
 - **两种 regime 共用一台引擎。** Decode 卡在 weight 读带宽上；prefill chunk 又是 compute-bound。也许它俩根本就不该共用同一组 GPU。**Prefill/decode 拆分** 探索的就是把它们丢到不同 replica 上去跑。
