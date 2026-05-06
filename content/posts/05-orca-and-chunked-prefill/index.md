@@ -13,7 +13,7 @@ weight: 6
 
 [Article 04](/llm_stories/posts/04-batching-many-requests/) left us with one forward pass that batches many prefills cleanly. But prefill is just the front half of a request's life. Once the prompt is consumed, the request enters a decode phase — generating one token at a time, sometimes for hundreds of steps, until it lands on an EOS. A real serving engine doesn't see neat prefill batches; it sees a turbulent mix of arriving prompts, ongoing decodes, and finishing requests, all sharing the same GPU at every moment.
 
-This article steps into that mess. We'll lean on [Article 01](/llm_stories/posts/01-fundamentals/) for the basic generation flow and the KV cache mechanics — assume both are familiar.
+This article steps into that mess. We'll lean on [Article 01](/llm_stories/posts/01-llm-end-to-end/) for the basic generation flow and the KV cache mechanics — assume both are familiar.
 
 (One name to fix in your head before we start, since the rest of the article leans on it: **an iteration is one end-to-end forward pass through all `L` layers of the model.** Whatever rows of input we feed in — a chunk of one prompt, decode steps for many requests, or a mix — an iteration runs them through layer 0, layer 1, all the way to layer `L−1`, once.)
 
