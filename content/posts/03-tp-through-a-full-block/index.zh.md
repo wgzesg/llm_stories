@@ -2,16 +2,16 @@
 title: "在一个 transformer block 中完整走完一遍 Tensor Parallelism"
 date: 2026-04-29T00:00:00+00:00
 draft: false
-summary: "把 article 01 的两种 cut 方式拿到一整个 transformer block 上跑一遍，盯着每一步每张 GPU 上的 shape。先把一种 cut 用到所有 matmul 上 —— 通信爆炸，每个 block 四次 gather。再把两种 cut 配成一对，刚好对上 widen-narrow 的架构节奏，落到每个 block 两次 all-reduce。"
+summary: "把 article 02 的两种 cut 方式拿到一整个 transformer block 上跑一遍，盯着每一步每张 GPU 上的 shape。先把一种 cut 用到所有 matmul 上 —— 通信爆炸，每个 block 四次 gather。再把两种 cut 配成一对，刚好对上 widen-narrow 的架构节奏，落到每个 block 两次 all-reduce。"
 description: "怎么把一整个 transformer block 切上两张 GPU。先全用 column-parallel，看一下为什么每个 block 要付四次 gather，再配上 row-parallel，自然走到 Megatron 那个每个 block 两次 all-reduce 的经典 pattern。每一步的 shape 都标在表里。"
 tags: ["tensor-parallelism", "transformers", "llm-serving", "megatron", "mental-model"]
 series: ["llm-stories"]
 showToc: true
 TocOpen: false
-weight: 3
+weight: 4
 ---
 
-[Article 01](/llm_stories/posts/01-tensor-parallelism-mental-model/) 留给我们两种把一次 matmul 切上两张 GPU 的方式。直接看它们*在做什么*，比记 paper 里那些名字省事得多。先把两种摆一起对一下：
+[Article 02](/llm_stories/posts/02-tensor-parallelism-mental-model/) 留给我们两种把一次 matmul 切上两张 GPU 的方式。直接看它们*在做什么*，比记 paper 里那些名字省事得多。先把两种摆一起对一下：
 
 |                          | **Strategy A** —— *切 `fx`*                  | **Strategy B** —— *切行*                            |
 |--------------------------|--------------------------------------------------------|----------------------------------------------------------------|
@@ -81,7 +81,7 @@ weight: 3
 
 ## 2. v1 —— 把 Strategy A（full → half）用到每个 matmul 上
 
-最自然的第一步是什么？回到 article 01，Strategy A 长这样：
+最自然的第一步是什么？回到 article 02，Strategy A 长这样：
 
 - **便宜**的那种 cut（concatenate，matmul 内部不需要 all-reduce）；
 - 用在 QKV 上**正好落在 head 边界**：`k = 8 · 64 = 512`，每张 GPU 256，正好一人 4 个 head；
@@ -182,7 +182,7 @@ weight: 3
 
 每次 gather 的存在都是一个原因：下一个算子要完整向量，但 Strategy A 给的是半个。我们真正想要的，是一个 *愿意* 直接吃半个输出的 matmul。
 
-article 01 已经把它递到我们手上了。
+article 02 已经把它递到我们手上了。
 
 ---
 
@@ -276,7 +276,7 @@ article 01 已经把它递到我们手上了。
 
 ## 5. 没料到的对偶性
 
-article 01 把 A 和 B 当两种独立 strategy 介绍 —— 同一个矩阵的两种读法。但把它们并排放着看，盯着每种的输入输出形状：
+article 02 把 A 和 B 当两种独立 strategy 介绍 —— 同一个矩阵的两种读法。但把它们并排放着看，盯着每种的输入输出形状：
 
 - **A** 拿 **完整输入**，吐 **半个输出**。
 - **B** 拿 **半个输入**，吐 **完整 sum** 作为输出。

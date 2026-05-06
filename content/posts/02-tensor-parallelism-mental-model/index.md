@@ -8,7 +8,7 @@ tags: ["tensor-parallelism", "transformers", "llm-serving", "mental-model"]
 series: ["llm-stories"]
 showToc: true
 TocOpen: false
-weight: 2
+weight: 3
 ---
 
 This isn't a tutorial. It's a walk through the mental model — the kind where each section makes you go *"oh, that's all it is?"* By the end, tensor parallelism shouldn't feel like an engineering trick. It should feel like the only two reasonable things you could possibly do.

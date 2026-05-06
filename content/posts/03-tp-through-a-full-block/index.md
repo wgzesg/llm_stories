@@ -2,16 +2,16 @@
 title: "Walking Tensor Parallelism Through a Full Block"
 date: 2026-04-29T00:00:00+00:00
 draft: false
-summary: "Walk article 01's two cuts through a full transformer block, with concrete shapes on each GPU at every step. Apply one cut to every matmul first — comm explodes (four gathers per block). Then pair the two cuts as duals and watch them snap into the architecture's widen-narrow rhythm, landing at two all-reduces per block."
+summary: "Walk article 02's two cuts through a full transformer block, with concrete shapes on each GPU at every step. Apply one cut to every matmul first — comm explodes (four gathers per block). Then pair the two cuts as duals and watch them snap into the architecture's widen-narrow rhythm, landing at two all-reduces per block."
 description: "How to split a full transformer block across two GPUs, with concrete shapes traced through every step. Start with column-parallel everywhere, see why it costs four gathers per block, then pair it with row-parallel to land at the Megatron pattern of two all-reduces per block."
 tags: ["tensor-parallelism", "transformers", "llm-serving", "megatron", "mental-model"]
 series: ["llm-stories"]
 showToc: true
 TocOpen: false
-weight: 3
+weight: 4
 ---
 
-[Article 01](/llm_stories/posts/01-tensor-parallelism-mental-model/) left you with two ways to split **one** matmul across two GPUs. They're easier to keep straight by what they *do* than by what they're called in the literature, so let's lay them out side by side:
+[Article 02](/llm_stories/posts/02-tensor-parallelism-mental-model/) left you with two ways to split **one** matmul across two GPUs. They're easier to keep straight by what they *do* than by what they're called in the literature, so let's lay them out side by side:
 
 |                          | **Strategy A** — *split the `fx`es*                  | **Strategy B** — *split the rows*                            |
 |--------------------------|--------------------------------------------------------|----------------------------------------------------------------|
@@ -182,7 +182,7 @@ So the question becomes:
 
 Each gather only exists because the next op needed a full vector and Strategy A had just produced a half one. What we actually need is a matmul that's *happy* consuming the half output directly.
 
-Article 01 already handed us one.
+Article 02 already handed us one.
 
 ---
 
@@ -276,7 +276,7 @@ That's the Megatron pattern. We didn't have to be told it — we walked into it.
 
 ## 5. The duality you didn't see coming
 
-Article 01 introduced A and B as if they were two separate strategies — two ways to read one matrix. Put them side by side and look at what flows in and out of each:
+Article 02 introduced A and B as if they were two separate strategies — two ways to read one matrix. Put them side by side and look at what flows in and out of each:
 
 - **A** takes a **full input** and produces a **half output**.
 - **B** takes a **half input** and produces a **full sum** as output.

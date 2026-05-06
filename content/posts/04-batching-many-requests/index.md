@@ -8,23 +8,23 @@ tags: ["batching", "varlen-attention", "selective-batching", "llm-serving", "men
 series: ["llm-stories"]
 showToc: true
 TocOpen: false
-weight: 4
+weight: 5
 ---
 
-[Article 02](/llm_stories/posts/02-tp-through-a-full-block/) left us with one transformer block running on two GPUs in two all-reduces per layer. But a real serving system has many users hitting the model concurrently — and their prompts are all different lengths. A 50-token *"what time is it"* sits next to a 5,000-token essay draft.
+[Article 03](/llm_stories/posts/03-tp-through-a-full-block/) left us with one transformer block running on two GPUs in two all-reduces per layer. But a real serving system has many users hitting the model concurrently — and their prompts are all different lengths. A 50-token *"what time is it"* sits next to a 5,000-token essay draft.
 
 Two questions to chase through this article:
 
 1. **How do we batch variable-length requests through one forward pass efficiently?** The naive answer — pad everything to the longest prompt and run it as a fixed batch — wastes a lot of compute on the short ones. There has to be a smarter way.
 2. **Does TP have to know any of this is happening?** Or can the batching trick and the model-splitting story stay independent of each other?
 
-We'll answer both by carrying Article 02's setup forward and watching what each layer does when more than one request flows through it.
+We'll answer both by carrying Article 03's setup forward and watching what each layer does when more than one request flows through it.
 
 ---
 
 ## 1. Setup
 
-Same numbers as Article 02:
+Same numbers as Article 03:
 
 | | value |
 |---|---|
@@ -40,9 +40,9 @@ Two example requests for the running discussion: **request A** of length 10, **r
 
 Three explicit assumptions we'll hold this article to:
 
-- **Prefill only.** We're computing the forward pass over each request's prompt. No token-by-token decoding yet — that's Article 04.
-- **Each request fits in one batch.** A batch holds ≥1 *whole* requests, never a fraction. Article 05 will relax this with chunked prefill.
-- **No KV cache yet.** The KV cache is what lets a *later* token attend back to earlier ones during decode. In a prefill-only world we just compute outputs and ship them; there's nothing to cache for later. KV cache enters with Article 04.
+- **Prefill only.** We're computing the forward pass over each request's prompt. No token-by-token decoding yet — that's Article 05.
+- **Each request fits in one batch.** A batch holds ≥1 *whole* requests, never a fraction. Article 06 will relax this with chunked prefill.
+- **No KV cache yet.** The KV cache is what lets a *later* token attend back to earlier ones during decode. In a prefill-only world we just compute outputs and ship them; there's nothing to cache for later. KV cache enters with Article 05.
 
 These keep the spatial story clean. The *temporal* story (continuous batching across iterations) is its own article.
 
@@ -50,7 +50,7 @@ These keep the spatial story clean. The *temporal* story (continuous batching ac
 
 ## 2. One request first: `N` is just a tensor dimension
 
-Before two requests, recall what one request looks like under the v2 pattern from Article 02. A single prefill of length `N` flows through the block as `[N × 512]`. From the trace there:
+Before two requests, recall what one request looks like under the v2 pattern from Article 03. A single prefill of length `N` flows through the block as `[N × 512]`. From the trace there:
 
 - 8 layers × 2 all-reduces per layer = **16 all-reduces** per forward pass.
 - Every all-reduce moves a `[N × 512]` tensor across GPUs.
@@ -107,7 +107,7 @@ The whole batching problem reduces to two questions:
 
 ## 5. Linear layers: the easy half
 
-Go back to how [Article 01](/llm_stories/posts/01-tensor-parallelism-mental-model/) framed a linear layer. The weight matrix is a row of little **feature extractors** — each `fx` is its own opaque function that takes one token's `d`-wide feature vector and returns one number. A linear layer with `k` outputs is just `k` of those extractors running side by side on the same token.
+Go back to how [Article 02](/llm_stories/posts/02-tensor-parallelism-mental-model/) framed a linear layer. The weight matrix is a row of little **feature extractors** — each `fx` is its own opaque function that takes one token's `d`-wide feature vector and returns one number. A linear layer with `k` outputs is just `k` of those extractors running side by side on the same token.
 
 ```
 token  ⇒  [ fx1   fx2   fx3   ...   fxk ]   ⇒   [ fx1(token), fx2(token), ..., fxk(token) ]
@@ -119,7 +119,7 @@ So when we hand the layer a flat tensor `[40 × 512]` — 40 tokens stacked — 
 
 That's the entire reason linear layers batch trivially. They're not "magically batchable" — they were already per-token. We're just running more of them.
 
-**Under TP=2:** unchanged from Article 02. The `fx`es are still split across GPUs, with each GPU owning half:
+**Under TP=2:** unchanged from Article 03. The `fx`es are still split across GPUs, with each GPU owning half:
 
 - G1 runs heads 1–4's `fx`es on `[40 × 512]` → `[40 × 768]`
 - G2 runs heads 5–8's `fx`es on `[40 × 512]` → `[40 × 768]`
@@ -291,7 +291,7 @@ Three things to notice:
 
 ### 6.3 Under TP=2
 
-Each GPU still owns its 4 heads from Article 02. The varlen kernel runs on each GPU's local Q, K, V — for *those* heads, for all requests' tokens. G1 doesn't need to know what G2 is doing during attention; G2's heads are G2's problem. The per-head independence we relied on in Article 02 still holds inside this loop. **No new comm.**
+Each GPU still owns its 4 heads from Article 03. The varlen kernel runs on each GPU's local Q, K, V — for *those* heads, for all requests' tokens. G1 doesn't need to know what G2 is doing during attention; G2's heads are G2's problem. The per-head independence we relied on in Article 03 still holds inside this loop. **No new comm.**
 
 So with linears (§5) and attention (§6) both handled, every step of the block is now correctly batched.
 
@@ -304,7 +304,7 @@ A "happy realization" worth pausing on. Look at what TP saw during the entire ba
 - A tensor of shape `[tokens × hidden]` flowing through the layers.
 - Weights split along heads.
 - All-reduces on `[tokens × hidden]` partial sums.
-- 16 sync events per block, exactly as in Article 02.
+- 16 sync events per block, exactly as in Article 03.
 
 **TP never saw a request boundary.** The flat tensor presented itself the same way to TP whether the 40 tokens came from one request or fifty. Request boundaries entered exactly one place — the `cu_seqlens` argument inside the varlen attention kernel — and that argument was used entirely on each GPU's local slice. No comm event involved.
 
@@ -318,7 +318,7 @@ Those questions don't constrain each other. We didn't design for this — it fel
 - Linear layers are per-token (so they don't see request boundaries even on one GPU).
 - Multi-head attention's heads are independent (so each GPU's per-head varlen loop never has to talk to other GPUs).
 
-The Article 02 punchline was that multi-head attention was a gift the modelers left for the systems people building TP. Here we see the same gift extended one layer further: the same head independence that makes TP comm-free *also* makes request batching comm-free. Two unrelated tricks compose for free because they were both granted by the same architectural property.
+The Article 03 punchline was that multi-head attention was a gift the modelers left for the systems people building TP. Here we see the same gift extended one layer further: the same head independence that makes TP comm-free *also* makes request batching comm-free. Two unrelated tricks compose for free because they were both granted by the same architectural property.
 
 ---
 
@@ -381,8 +381,8 @@ We now have a scheme for running many concurrent prefill requests through a TP-p
 
 Three follow-up questions earn the next round of articles:
 
-- **What if a request needs to generate many output tokens?** Prefill is one shot per prompt. Decode adds a token-by-token phase with a very different bottleneck profile and a new structure (the KV cache) to remember earlier tokens. **Article 04 — decode and continuous batching across iterations.**
-- **What if one request is so long it doesn't fit in a batch?** Sometimes the assumption "every request fits" breaks. The fix is *chunked prefill* — process the prompt in slices, building up the KV cache as you go. **Article 05.**
+- **What if a request needs to generate many output tokens?** Prefill is one shot per prompt. Decode adds a token-by-token phase with a very different bottleneck profile and a new structure (the KV cache) to remember earlier tokens. **Article 05 — decode and continuous batching across iterations.**
+- **What if one request is so long it doesn't fit in a batch?** Sometimes the assumption "every request fits" breaks. The fix is *chunked prefill* — process the prompt in slices, building up the KV cache as you go. **Article 06.**
 - **How does the varlen attention kernel actually run fast on a GPU?** We used naive attention math throughout this article. The high-performance version (FlashAttention) avoids materializing the score matrix at all, using a tiled online-softmax recurrence. That's a kernel-level deep-dive worth its own article, later in the series.
 
 Same grammar each time: pick one assumption from the current article, relax it, see what falls out.
