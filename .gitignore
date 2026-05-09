@@ -19,3 +19,7 @@ node_modules/
 
 # OS
 Thumbs.db
+
+# Local reference symlinks
+/vllm
+/sglang

@@ -19,6 +19,7 @@ Most articles come in two languages: English and 中文. The Chinese versions ke
 | 03 | Walking tensor parallelism through a full block | [index.md](content/posts/03-tp-through-a-full-block/index.md) | [index.zh.md](content/posts/03-tp-through-a-full-block/index.zh.md) |
 | 04 | How to batch many requests through one forward pass | [index.md](content/posts/04-batching-many-requests/index.md) | [index.zh.md](content/posts/04-batching-many-requests/index.zh.md) |
 | 05 | ORCA and chunked prefill: evening out the iteration | [index.md](content/posts/05-orca-and-chunked-prefill/index.md) | — |
+| 06 | Prefill and decode disaggregation: two phases on opposite sides of the roofline | [index.md](content/posts/06-prefill-decode-disaggregation/index.md) | — |
 
 The full list — shipped, in progress, and the holes still left to dig — lives in the [roadmap](content/posts/00-roadmap/index.md).
 

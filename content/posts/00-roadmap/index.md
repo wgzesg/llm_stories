@@ -27,16 +27,17 @@ The list below is **alive** — articles flip status as they ship, and the roadm
 | 03 | Walking TP through a full block — start column-parallel everywhere, watch the comm explode, pair with row-parallel until two all-reduces per block fall out | `[done]` | [read →](/llm_stories/posts/03-tp-through-a-full-block/) |
 | 04 | How to batch many requests through one forward pass — varlen attention, prefill only, TP turns out to be untouched | `[done]` | [read →](/llm_stories/posts/04-batching-many-requests/) |
 | 05 | ORCA and chunked prefill — iteration-level scheduling solves the boundary problems; chunked prefill bounds the iteration so a long prompt can't hijack the engine's heartbeat | `[done]` | [read →](/llm_stories/posts/05-orca-and-chunked-prefill/) |
-| 06 | Pipeline parallelism — the cut *across* blocks instead of within one, and the bubble it creates | `[planned]` | — |
-| 07 | MoE and expert parallelism — what changes when FFN becomes routed | `[planned]` | — |
-| 08 | Prefill and decode disaggregation — when the two phases stop sharing an engine because their bottleneck profiles disagree | `[planned]` | — |
-| 09 | PagedAttention — the KV cache as virtual memory, blocks instead of contiguous slabs, copy-on-write across requests | `[planned]` | — |
-| 10 | Sequence and context parallelism — splitting one *request* across GPUs, ring attention, the long-context move | `[planned]` | — |
-| 11 | FlashAttention — tiled online softmax, why the `[L × L]` score matrix never has to exist | `[speculative]` | — |
-| 12 | FlashDecoding — making the `1 × L_kv` decode-attention call fast under bandwidth pressure | `[speculative]` | — |
-| 13 | GQA and MLA — fewer KV heads, smaller KV cache, faster decode (and what it costs the model) | `[speculative]` | — |
-| 14 | Speculative decoding — a draft model proposes, the big model verifies, two passes for the price of one | `[speculative]` | — |
-| 15 | KV compression — quantization, eviction policies, what we can drop and what we can't | `[speculative]` | — |
+| 06 | Prefill and decode disaggregation — two phases on opposite sides of the roofline; once you accept the asymmetry, sharing a GPU pool is no longer a compromise but a fight against the formula | `[done]` | [read →](/llm_stories/posts/06-prefill-decode-disaggregation/) |
+| 07 | The engineering of disaggregation — KV cache transfer across fabrics (NVLink, NVSwitch, IB, PCIe), tiered memory pools (HBM, DRAM, SSD), overlap with prefill, topology-aware routing | `[next]` | — |
+| 08 | Pipeline parallelism — the cut *across* blocks instead of within one, and the bubble it creates; why the prefill pool wants it | `[planned]` | — |
+| 09 | MoE and expert parallelism — what changes when FFN becomes routed | `[planned]` | — |
+| 10 | PagedAttention — the KV cache as virtual memory, blocks instead of contiguous slabs, copy-on-write across requests | `[planned]` | — |
+| 11 | Sequence and context parallelism — splitting one *request* across GPUs, ring attention, the long-context move | `[planned]` | — |
+| 12 | FlashAttention — tiled online softmax, why the `[L × L]` score matrix never has to exist | `[speculative]` | — |
+| 13 | FlashDecoding — making the `1 × L_kv` decode-attention call fast under bandwidth pressure | `[speculative]` | — |
+| 14 | GQA and MLA — fewer KV heads, smaller KV cache, faster decode (and what it costs the model) | `[speculative]` | — |
+| 15 | Speculative decoding — a draft model proposes, the big model verifies, two passes for the price of one | `[speculative]` | — |
+| 16 | KV compression — quantization, eviction policies, what we can drop and what we can't | `[speculative]` | — |
 
 ## Status legend
 
