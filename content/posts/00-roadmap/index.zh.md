@@ -27,7 +27,7 @@ weight: 1
 | 03 | 在一个 transformer block 中完整走完一遍 Tensor Parallelism —— 先全用 column-parallel 看通信怎么爆掉，再配上 row-parallel 落到每个 block 两次 all-reduce | `[done]` | [阅读 →](/llm_stories/zh/posts/03-tp-through-a-full-block/) |
 | 04 | 一次 forward 怎么塞下很多个 request —— varlen attention，只考虑 prefill，TP 完全没动到 | `[done]` | [阅读 →](/llm_stories/zh/posts/04-batching-many-requests/) |
 | 05 | ORCA 和 chunked prefill —— iteration-level 调度先把进出 batch 的边界问题解决掉；chunked prefill 再给每次 iteration 的开销封顶，免得一个长 prompt 把整台引擎卡住 | `[done] (EN)` | [read →](/llm_stories/posts/05-orca-and-chunked-prefill/) |
-| 06 | Prefill 和 decode 拆机 —— 两个阶段在 roofline 的两侧，承认这种 asymmetry 之后，共用一池 GPU 就不再是折中，而是在跟公式硬扛 | `[done] (EN)` | [read →](/llm_stories/posts/06-prefill-decode-disaggregation/) |
+| 06 | Prefill 和 decode 拆机 —— 两个阶段在 roofline 的两侧，承认这种 asymmetry 之后，共用一池 GPU 就不再是折中，而是在跟公式硬扛 | `[done]` | [阅读 →](/llm_stories/zh/posts/06-prefill-decode-disaggregation/) |
 | 07 | 拆机后的工程问题 —— KV cache 跨 fabric 怎么传（NVLink、NVSwitch、IB、PCIe）、tiered memory pool（HBM、DRAM、SSD）、跟 prefill 怎么 overlap、按拓扑路由 | `[next]` | — |
 | 08 | Pipeline parallelism —— 切 *跨* block 而不是 block *内部*，以及它带来的 bubble；prefill pool 为什么想要它 | `[planned]` | — |
 | 09 | MoE 和 expert parallelism —— FFN 变成 routed 之后改了什么 | `[planned]` | — |
